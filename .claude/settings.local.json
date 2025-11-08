@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/jakegundersen/Repos/VideoProcessingTwo/Sources/**)",
+      "Read(//Users/jakegundersen/Repos/VideoProcessingTwo/**)",
+      "Bash(find:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
