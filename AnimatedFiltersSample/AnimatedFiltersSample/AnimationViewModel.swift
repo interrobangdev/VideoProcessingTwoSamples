@@ -71,7 +71,7 @@ class AnimationViewModel: ObservableObject {
         )
 
         // Create composition with scene
-        guard let result = SceneVideoComposition.createComposition(videoURL: videoURL, scene: scene) else {
+        guard let result = SceneVideoComposition.createComposition(scene: scene) else {
             errorMessage = "Failed to create composition"
             return
         }
@@ -105,7 +105,7 @@ class AnimationViewModel: ObservableObject {
         )
 
         // Create new composition with updated scene
-        guard let result = SceneVideoComposition.createComposition(videoURL: videoURL, scene: scene) else {
+        guard let result = SceneVideoComposition.createComposition(scene: scene) else {
             return
         }
 

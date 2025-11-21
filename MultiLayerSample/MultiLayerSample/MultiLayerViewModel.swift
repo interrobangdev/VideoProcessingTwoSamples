@@ -35,78 +35,91 @@ class MultiLayerViewModel: NSObject, ObservableObject {
         let scene = VideoScene(duration: 10.0, frameRate: 30.0, size: CGSize(width: 1280, height: 720))
 
         
-        // Video 1 - left third
-        if let videoURL = Bundle.main.url(forResource: "desk", withExtension: "mov") {
-            let videoSource = VideoSource(url: videoURL)
+        // Video 1 - left third (plays from 0s to 5s, starts at beginning of source)
+        if let videoURL = Bundle.main.url(forResource: "blue_counter", withExtension: "mov") {
+            let videoSource = VideoSource(url: videoURL, useComposition: true)
+            videoSource.compositionStartTime = 0.0
+            videoSource.duration = 5.0
+            videoSource.sourceStartTime = 0.0
             let surface1 = Surface(
                 source: videoSource,
                 frame: CGRect(x: 0, y: 0, width: 426, height: 720),
                 rotation: 0
             )
             let layer1 = Layer(surfaces: [surface1])
-            let group1 = Group(groups: [], layers: [layer1], filters: [], mask: nil)
+            let group1 = LayerGroup(groups: [], layers: [layer1], filters: [], mask: nil)
             scene.group.groups.append(group1)
         }
 
-        
-        // Video 2 - middle third
-        if let videoURL = Bundle.main.url(forResource: "mountain", withExtension: "mov") {
-            let videoSource = VideoSource(url: videoURL)
+        // Video 2 - middle third (plays from 2s to 9s, starts 1s into source)
+        if let videoURL = Bundle.main.url(forResource: "green_counter", withExtension: "mov") {
+            let videoSource = VideoSource(url: videoURL, useComposition: true)
+            videoSource.compositionStartTime = 2.0
+            videoSource.duration = 7.0
+            videoSource.sourceStartTime = 1.0
             let surface2 = Surface(
                 source: videoSource,
                 frame: CGRect(x: 427, y: 0, width: 426, height: 720),
                 rotation: 0
             )
             let layer2 = Layer(surfaces: [surface2])
-            let group2 = Group(groups: [], layers: [layer2], filters: [], mask: nil)
+            let group2 = LayerGroup(groups: [], layers: [layer2], filters: [], mask: nil)
             scene.group.groups.append(group2)
         }
 
-        
-        // Video 3 - right third
-        if let videoURL = Bundle.main.url(forResource: "download", withExtension: "mov") {
-            let videoSource = VideoSource(url: videoURL)
+        // Video 3 - right third (plays from 4s to 10s, starts at beginning of source)
+        if let videoURL = Bundle.main.url(forResource: "purple_counter", withExtension: "mov") {
+            let videoSource = VideoSource(url: videoURL, useComposition: true)
+            videoSource.compositionStartTime = 4.0
+            videoSource.duration = 6.0
+            videoSource.sourceStartTime = 0.0
             let surface3 = Surface(
                 source: videoSource,
                 frame: CGRect(x: 853, y: 0, width: 427, height: 720),
                 rotation: 0
             )
             let layer3 = Layer(surfaces: [surface3])
-            let group3 = Group(groups: [], layers: [layer3], filters: [], mask: nil)
+            let group3 = LayerGroup(groups: [], layers: [layer3], filters: [], mask: nil)
             scene.group.groups.append(group3)
-        } 
-
-        // GIF overlay - bottom center
+        }
+ 
+    
+        // GIF overlay - bottom center (plays from 3s to 7s)
         if let gifURL = Bundle.main.url(forResource: "horse", withExtension: "gif") {
             if let gifData = try? Data(contentsOf: gifURL),
                let gifImage = GIFImage(gifData: gifData) {
                 let gifSource = GIFImageSource(image: gifImage)
+                gifSource.compositionStartTime = 3.0
+                gifSource.duration = 4.0
+                gifSource.sourceStartTime = 0.0
                 let surfaceGIF = Surface(
                     source: gifSource,
                     frame: CGRect(x: 440, y: 540, width: 400, height: 180),
                     rotation: 0
                 )
                 let gifLayer = Layer(surfaces: [surfaceGIF])
-                let gifGroup = Group(groups: [], layers: [gifLayer], filters: [], mask: nil)
+                let gifGroup = LayerGroup(groups: [], layers: [gifLayer], filters: [], mask: nil)
                 scene.group.groups.append(gifGroup)
             }
         }
 
-        // Image - top right
+        // Image - top right (displays from 1s to 8s)
         if let image = UIImage(named: "art"),
            let cgImage = image.cgImage {
             let imageSource = ImageSource(image: cgImage)
+            imageSource.compositionStartTime = 1.0
+            imageSource.duration = 7.0
             let surfaceImage = Surface(
                 source: imageSource,
                 frame: CGRect(x: 1088, y: 36, width: 192, height: 108),
                 rotation: 0
             )
             let imageLayer = Layer(surfaces: [surfaceImage])
-            let imageGroup = Group(groups: [], layers: [imageLayer], filters: [], mask: nil)
+            let imageGroup = LayerGroup(groups: [], layers: [imageLayer], filters: [], mask: nil)
             scene.group.groups.append(imageGroup)
         }
 
-        // Text label - bottom
+        // Text label - bottom (displays from 0s to 10s)
         let textStyle = TextSource.TextStyle(
             font: "Helvetica",
             fontSize: 48,
@@ -120,13 +133,15 @@ class MultiLayerViewModel: NSObject, ObservableObject {
             canvasSize: CGSize(width: 880, height: 72),
             wordDuration: 5.0
         )
+        textSource.compositionStartTime = 0.0
+        textSource.duration = 10.0
         let surfaceText = Surface(
             source: textSource,
             frame: CGRect(x: 200, y: 100, width: 880, height: 72),
             rotation: 0
         )
         let textLayer = Layer(surfaces: [surfaceText])
-        let textGroup = Group(groups: [], layers: [textLayer], filters: [], mask: nil)
+        let textGroup = LayerGroup(groups: [], layers: [textLayer], filters: [], mask: nil)
         scene.group.groups.append(textGroup)
 
         return scene

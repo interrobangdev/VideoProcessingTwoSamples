@@ -6,15 +6,25 @@
 //
 
 import SwiftUI
+import VideoProcessingTwo
 
 struct ContentView: View {
     @StateObject private var viewModel = CameraViewModel()
 
     var body: some View {
         ZStack {
-            // Camera preview
-            CameraPreviewView(image: viewModel.currentFrame)
-                .ignoresSafeArea()
+            // Metal view for displaying camera feed
+            if let ciImage = viewModel.displayCIImage {
+                MetalView(ciImage: ciImage, isFrontCamera: false)
+                    .edgesIgnoringSafeArea(.all)
+            } else {
+                Color.black
+                    .overlay(
+                        ProgressView()
+                            .tint(.white)
+                    )
+                    .edgesIgnoringSafeArea(.all)
+            }
 
             // Filter controls overlay
             VStack {
@@ -53,39 +63,6 @@ struct ContentView: View {
         .onDisappear {
             viewModel.stopCamera()
         }
-    }
-}
-
-struct CameraPreviewView: View {
-    let image: CIImage?
-
-    var body: some View {
-        GeometryReader { geometry in
-            if let ciImage = image {
-                Image(decorative: convertCIImageToCGImage(ciImage), scale: 1.0)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-            } else {
-                Color.black
-                    .overlay(
-                        ProgressView()
-                            .tint(.white)
-                    )
-            }
-        }
-    }
-
-    private func convertCIImageToCGImage(_ ciImage: CIImage) -> CGImage {
-        let context = CIContext()
-        if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
-            return cgImage
-        }
-        // Fallback to a 1x1 transparent image
-        let size = CGSize(width: 1, height: 1)
-        let renderer = UIGraphicsImageRenderer(size: size)
-        let uiImage = renderer.image { _ in }
-        return uiImage.cgImage!
     }
 }
 

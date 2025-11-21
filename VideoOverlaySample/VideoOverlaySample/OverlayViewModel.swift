@@ -123,7 +123,8 @@ class OverlayViewModel: ObservableObject {
             type: .video,
             frame: videoFrame,
             rotation: 0.0,
-            assetURL: videoURL!
+            assetURL: videoURL!,
+            text: ""
         )
 
         // Add photo overlay if loaded (group 0, layer 0)
@@ -143,7 +144,7 @@ class OverlayViewModel: ObservableObject {
             let fadeFilter = Fade(fade: photoOpacity, filterAnimators: [])
 
             // Create group with layer and filter
-            let photoGroup = Group(groups: [], layers: [layer], filters: [fadeFilter], mask: nil)
+            let photoGroup = LayerGroup(groups: [], layers: [layer], filters: [fadeFilter], mask: nil)
             scene.group.groups.append(photoGroup)
         }
 
@@ -164,7 +165,7 @@ class OverlayViewModel: ObservableObject {
             let fadeFilter = Fade(fade: gifOpacity, filterAnimators: [])
 
             // Create group with layer and filter
-            let gifGroup = Group(groups: [], layers: [layer], filters: [fadeFilter], mask: nil)
+            let gifGroup = LayerGroup(groups: [], layers: [layer], filters: [fadeFilter], mask: nil)
             scene.group.groups.append(gifGroup)
         }
 

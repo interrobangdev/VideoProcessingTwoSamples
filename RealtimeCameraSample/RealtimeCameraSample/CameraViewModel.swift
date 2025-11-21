@@ -12,12 +12,26 @@ import Combine
 import VideoProcessingTwo
 
 class CameraViewModel: NSObject, ObservableObject {
-    @Published var currentFrame: CIImage?
-    @Published var selectedFilter: FilterType = .none
-    @Published var filterIntensity: Double = 0.5
+    @Published var displayCIImage: CIImage?
+    @Published var selectedFilter: FilterType = .none {
+        didSet {
+            updateFilters()
+        }
+    }
+    @Published var filterIntensity: Double = 0.5 {
+        didSet {
+            updateFilters()
+        }
+    }
 
     private let cameraManager = CameraManager()
-    private let context = CIContext()
+    private let cameraSource: CameraSource
+    private var cameraScene: VideoScene?
+
+    private var blurFilter: GaussianBlur?
+    private var crystallizeFilter: Crystallize?
+    private var colorAdjustmentFilter: ColorAdjustment?
+    private var glitchFilter: GlitchEffect?
 
     // Track device orientation
     private var currentOrientation: UIDeviceOrientation = .portrait
@@ -34,20 +48,36 @@ class CameraViewModel: NSObject, ObservableObject {
     }
 
     override init() {
+        cameraSource = CameraSource(cameraManager: cameraManager)
         super.init()
+        cameraSource.delegate = self
+        setupScene()
         setupCamera()
         setupOrientationObserver()
     }
 
+    private func setupScene() {
+        // Create a surface with the camera source
+        let surface = Surface(source: cameraSource, frame: CGRect(x: 0, y: 0, width: 1920, height: 1080), rotation: 0)
+        let layer = Layer(surfaces: [surface])
+
+        // Create the main group
+        let mainGroup = LayerGroup(groups: [], layers: [layer], filters: [], mask: nil)
+
+        // Create the scene
+        let scene = VideoScene(duration: .infinity, frameRate: 30.0)
+        scene.group = mainGroup
+        cameraScene = scene
+    }
+
     private func setupCamera() {
-        cameraManager.delegate = self
         cameraManager.setup()
 
         // Request camera permission
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             if granted {
                 DispatchQueue.main.async {
-                    self?.cameraManager.start()
+                    self?.cameraSource.startCamera()
                 }
             } else {
                 print("Camera permission denied")
@@ -95,69 +125,49 @@ class CameraViewModel: NSObject, ObservableObject {
         cameraManager.stop()
     }
 
-    private func rotationAngleForOrientation() -> CGFloat {
-        // Camera buffer comes in landscape left by default
-        // We need to rotate to match the device orientation
-        switch currentOrientation {
-        case .portrait:
-            return -.pi / 2 // -90 degrees (rotate counter-clockwise)
-        case .landscapeLeft:
-            return 0 // No rotation
-        case .landscapeRight:
-            return .pi // 180 degrees (flip)
-        default:
-            return -.pi / 2 // Default to portrait
-        }
-    }
+    private func updateFilters() {
+        var filters: [Filter] = []
 
-    private func applyFilter(to image: CIImage) -> CIImage {
         switch selectedFilter {
         case .none:
-            return image
+            break
 
         case .blur:
-            let filter = GaussianBlur(radius: 10.0, filterAnimators: [])
-            filter.radius = filterIntensity * 20.0 // 0-20 radius
-            return filter.filterContent(image: image, sourceTime: nil, sceneTime: nil, compositionTime: nil) ?? image
+            let filter = GaussianBlur(radius: filterIntensity * 20.0, filterAnimators: [])
+            filters.append(filter)
 
         case .crystallize:
             let filter = Crystallize()
             filter.radius = filterIntensity * 30.0 + 5.0 // 5-35 radius
-            return filter.filterContent(image: image, sourceTime: nil, sceneTime: nil, compositionTime: nil) ?? image
+            filters.append(filter)
 
         case .colorAdjustment:
             let filter = ColorAdjustment()
             filter.saturation = filterIntensity * 2.0 // 0-2 saturation
             filter.brightness = (filterIntensity - 0.5) * 0.4 // -0.2 to 0.2
             filter.contrast = 1.0 + (filterIntensity - 0.5) * 0.4 // 0.8 to 1.2
-            return filter.filterContent(image: image, sourceTime: nil, sceneTime: nil, compositionTime: nil) ?? image
+            filters.append(filter)
 
         case .glitch:
             let filter = GlitchEffect()
             filter.intensity = filterIntensity
-            return filter.filterContent(image: image, sourceTime: nil, sceneTime: nil, compositionTime: nil) ?? image
+            filters.append(filter)
         }
+
+        cameraScene?.group.filters = filters
     }
 }
 
-// MARK: - CameraManagerDelegate
-extension CameraViewModel: CameraManagerDelegate {
-    func didOutputFrame(frame: Frame) {
-        guard let ciImage = frame.ciImageRepresentation() else { return }
+// MARK: - CameraSourceDelegate
+extension CameraViewModel: CameraSourceDelegate {
+    func didReceiveFrame(frame: any Frame) {
+        guard let scene = cameraScene else { return }
 
-        // Apply rotation based on device orientation
-        let angle = rotationAngleForOrientation()
-        let rotatedImage = ciImage.transformed(by: CGAffineTransform(rotationAngle: angle))
-
-        // Apply selected filter
-        let filteredImage = applyFilter(to: rotatedImage)
-
-        DispatchQueue.main.async {
-            self.currentFrame = filteredImage
+        let cmTime = frame.time
+        if let renderedImage = scene.group.renderGroup(frameTime: cmTime.seconds, compositionTimeOffset: 0, inputImage: nil) {
+            DispatchQueue.main.async {
+                self.displayCIImage = renderedImage
+            }
         }
-    }
-
-    func didOutputPhotoFrame(photo: CIImage) {
-        // Handle photo capture if needed
     }
 }
