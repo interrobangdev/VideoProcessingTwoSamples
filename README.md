@@ -7,6 +7,9 @@ A collection of sample iOS projects demonstrating the capabilities of the VideoP
 ### AnimatedFiltersSample
 Demonstrates real-time filter animations applied to video playback. Shows how to create animated filters with customizable parameters that change over time.
 
+### FilterShowcaseSample2
+Interactive filter explorer for `VideoProcessingTwo` with a searchable filter/style list and a live parameter panel. Includes migrated Shimmeo style filters and style recipes so you can tune values and see results immediately.
+
 ### HandPoseAnimationSample
 Uses Vision framework hand pose detection to drive interactive animations and effects. The app detects hand positions and uses them to control blur and brightness filters in real-time. Also demonstrates audio-driven animations for visual feedback.
 
