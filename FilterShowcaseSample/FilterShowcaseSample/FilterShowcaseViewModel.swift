@@ -522,6 +522,22 @@ private extension FilterShowcaseViewModel {
                 }
             ),
             ShowcaseEntry(
+                id: "temporal_texture_atlas",
+                name: "Temporal Texture Atlas",
+                subtitle: "Atlas-backed temporal offset",
+                category: "Migrated",
+                parameters: [p("frameOffset", "Frame Offset", 0.0...240.0, 0.0, step: 1.0)],
+                makeFilters: { values, _ in
+                    let offset = Int((values["frameOffset"] ?? 0.0).rounded())
+                    return [TemporalTextureAtlasOutputsFilter(
+                        frameOffsets: [offset],
+                        primaryOutputIndex: 0,
+                        inputFrameSize: CGSize(width: 1024, height: 1024),
+                        filterAnimators: []
+                    )]
+                }
+            ),
+            ShowcaseEntry(
                 id: "comic",
                 name: "Comic Stylize",
                 subtitle: "CIComicEffect blend",

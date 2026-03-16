@@ -1,25 +1,27 @@
-# Filter Showcase Sample
+# Filter Showcase Sample 2
 
-`FilterShowcaseSample` is a playground app for `VideoProcessingTwo` filters and style recipes.
+`FilterShowcaseSample2` is a live camera-based playground for `VideoProcessingTwo`.
 
 ## What It Demonstrates
 
-- Interactive preview playback with `SceneVideoComposition`
-- A broad filter catalog spanning core filters and migrated Shimmeo-era filters
-- Style preset playback using `ShimmeoStyleRecipeFactory`
-- Live parameter tuning via an auto-generated slider panel
+- Full-screen live camera rendering using `CameraSource` + `VideoScene`.
+- Slide-up translucent control panel over the camera feed.
+- Two browsing modes:
+  - Individual filters (with parameter sliders)
+  - Style recipes from `ShimmeoStyleRecipeFactory`
+- Real-time parameter updates while the camera is running.
 
 ## Main Files
 
 - `FilterShowcaseSample/ContentView.swift`
-  - UI for mode switching (`Filters` vs `Style Presets`), search, picker, and parameter controls.
+  - Full-screen `MetalView` camera preview
+  - Sliding controls panel with search, selection, and parameter UI
 - `FilterShowcaseSample/FilterShowcaseViewModel.swift`
-  - Builds filter/style catalogs.
-  - Rebuilds the composition when selection/parameters change.
-  - Defines filter parameter metadata and filter construction closures.
+  - Camera setup (`CameraManager` / `CameraSource`)
+  - Filter and recipe catalogs
+  - Live application of current filter/recipe and parameter values
 
 ## Notes
 
-- The sample uses bundled video (`download.mov`, fallback `mountain.mp4`).
-- Some filters are time-varying (pulse, jitter, twirl) and animate continuously.
-- Style presets are loaded from `ShimmeoStyleRecipeFactory.supportedStorageNames`, including newly migrated entries.
+- The filter list includes all concrete filter types in `VideoProcessingTwo/Sources/Filters` (excluding utility base/protocol files).
+- Recipe mode includes all unique recipe storages resolved from `ShimmeoStyleRecipeFactory.supportedStorageNames`.
