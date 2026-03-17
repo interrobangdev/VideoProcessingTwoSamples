@@ -349,6 +349,67 @@ private extension FilterShowcaseViewModel {
                 }
             ),
             ShowcaseEntry(
+                id: "voronoi",
+                name: "Voronoi",
+                subtitle: "Cellular stylize",
+                category: "Core",
+                parameters: [
+                    p("scale", "Cell Size", 4.0...120.0, 32.0, step: 1.0),
+                    p("radius", "Jitter", 0.0...1.0, 0.9),
+                    p("intensity", "Intensity", 0.0...1.0, 1.0),
+                    p("edge", "Edge", 0.0...1.0, 0.75),
+                    p("color", "Color Variation", 0.0...1.0, 0.35),
+                    p("drift", "Drift Speed", 0.0...2.0, 0.25)
+                ],
+                makeFilters: { values, _ in
+                    [Voronoi(
+                        scale: values["scale"] ?? 32.0,
+                        radius: values["radius"] ?? 0.9,
+                        intensity: values["intensity"] ?? 1.0,
+                        edgeIntensity: values["edge"] ?? 0.75,
+                        colorVariation: values["color"] ?? 0.35,
+                        driftSpeed: values["drift"] ?? 0.25,
+                        filterAnimators: []
+                    )]
+                }
+            ),
+            ShowcaseEntry(
+                id: "jfa_voronoi",
+                name: "JFA Voronoi",
+                subtitle: "Multipass jump flood Voronoi",
+                category: "Core",
+                parameters: [
+                    p("particles", "Particles", 16.0...512.0, 160.0, step: 1.0),
+                    p("intensity", "Intensity", 0.0...1.0, 1.0),
+                    p("edge", "Edge", 0.0...1.0, 0.8),
+                    p("color", "Color Variation", 0.0...1.0, 0.35),
+                    p("velocity", "Particle Velocity", 0.0...0.8, 0.10),
+                    p("orbit", "Orbit Amount", 0.0...0.4, 0.07),
+                    p("speed", "Drift Speed", 0.0...2.0, 0.45),
+                    p("jitter", "Particle Jitter", 0.0...1.0, 0.25)
+                ],
+                makeFilters: { values, _ in
+                    let generator = AnimatedParticleGenerator(
+                        velocity: Float(values["velocity"] ?? 0.10),
+                        orbitAmplitude: Float(values["orbit"] ?? 0.07),
+                        orbitSpeed: Float(values["speed"] ?? 0.45),
+                        jitterAmount: Float(values["jitter"] ?? 0.25)
+                    )
+                    return [JFAVoronoiFilter(
+                        particleCount: max(1, Int((values["particles"] ?? 160.0).rounded())),
+                        intensity: values["intensity"] ?? 1.0,
+                        edgeIntensity: values["edge"] ?? 0.8,
+                        colorVariation: values["color"] ?? 0.35,
+                        particleVelocity: values["velocity"] ?? 0.10,
+                        particleOrbitAmplitude: values["orbit"] ?? 0.07,
+                        particleDriftSpeed: values["speed"] ?? 0.45,
+                        particleJitter: values["jitter"] ?? 0.25,
+                        particleGenerator: generator,
+                        filterAnimators: []
+                    )]
+                }
+            ),
+            ShowcaseEntry(
                 id: "dissolve_blend",
                 name: "Dissolve Blend",
                 subtitle: "Two-input dissolve",
@@ -745,8 +806,8 @@ private extension FilterShowcaseViewModel {
             ),
             ShowcaseEntry(
                 id: "kuwahara",
-                name: "Kuwahara Stylize",
-                subtitle: "Painterly abstraction",
+                name: "Kuwahara (Metal)",
+                subtitle: "Painterly abstraction (custom Metal)",
                 category: "Migrated",
                 parameters: [
                     p("radius", "Radius", 1.0...20.0, 8.0, step: 1.0),
