@@ -76,14 +76,21 @@ struct ContentView: View {
 
                 // Blur source selector
                 VStack(spacing: 12) {
-                    Picker("Blur Source", selection: $viewModel.blurSource) {
-                        Text("Hand Position").tag(CameraViewModel.BlurSource.hand)
-                        Text("Audio").tag(CameraViewModel.BlurSource.audio)
+                    HStack {
+                        Text("Mode")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.85))
+                        Spacer()
+                        Picker("Analysis Mode", selection: $viewModel.analysisMode) {
+                            ForEach(CameraViewModel.AnalysisMode.allCases) { mode in
+                                Text(mode.displayName).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.menu)
                     }
-                    .pickerStyle(.segmented)
                     .padding(.horizontal)
 
-                    if viewModel.blurSource == .audio {
+                    if viewModel.isAudioMode {
                         // Audio player controls
                         VStack(spacing: 12) {
                             HStack(spacing: 12) {
@@ -143,85 +150,33 @@ struct ContentView: View {
                 .cornerRadius(8)
                 .padding()
 
-                // Filter parameter values
-                if let position = viewModel.handPosition, viewModel.blurSource == .hand {
-                    let brightness = (position.y - 0.5)
-                    let dx = position.x - 0.5
-                    let dy = position.y - 0.5
-                    let distance = sqrt(dx * dx + dy * dy) / 0.707
-                    let scale = 0.8 + (distance * 0.5)
-                    let angle = atan2(dy, dx)
-                    let degrees = ((angle + .pi) / (2 * .pi)) * 360
+                // Mode analysis values
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("\(viewModel.analysisMode.displayName) Metrics")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Filter Parameters")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.white)
+                    Divider()
+                        .background(Color.white.opacity(0.3))
 
-                        Divider()
-                            .background(Color.white.opacity(0.3))
-
+                    ForEach(viewModel.currentModeMetrics, id: \.label) { metric in
                         HStack {
-                            Text("Blur (X):")
+                            Text(metric.label + ":")
                                 .font(.caption2)
                                 .foregroundColor(.white)
                             Spacer()
-                            Text(String(format: "%.1f px", position.x * 20.0))
-                                .font(.caption2)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.cyan)
-                        }
-
-                        HStack {
-                            Text("Brightness (Y):")
-                                .font(.caption2)
-                                .foregroundColor(.white)
-                            Spacer()
-                            Text(String(format: "%.2f", brightness))
-                                .font(.caption2)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.cyan)
-                        }
-
-                        HStack {
-                            Text("Scale (Distance):")
-                                .font(.caption2)
-                                .foregroundColor(.white)
-                            Spacer()
-                            Text(String(format: "%.2f x", scale))
-                                .font(.caption2)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.cyan)
-                        }
-
-                        HStack {
-                            Text("Rotation (Angle):")
-                                .font(.caption2)
-                                .foregroundColor(.white)
-                            Spacer()
-                            Text(String(format: "%.1f°", degrees))
-                                .font(.caption2)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.cyan)
-                        }
-
-                        HStack {
-                            Text("Opacity (Y):")
-                                .font(.caption2)
-                                .foregroundColor(.white)
-                            Spacer()
-                            Text(String(format: "%.0f%%", position.y * 100))
+                            Text(metric.value)
                                 .font(.caption2)
                                 .fontWeight(.semibold)
                                 .foregroundColor(.cyan)
                         }
                     }
-                    .padding()
-                    .background(Color.black.opacity(0.6))
-                    .cornerRadius(8)
-                    .padding()
                 }
+                .padding()
+                .background(Color.black.opacity(0.6))
+                .cornerRadius(8)
+                .padding()
 
                 // Bottom stats
                 VStack(alignment: .leading, spacing: 4) {
