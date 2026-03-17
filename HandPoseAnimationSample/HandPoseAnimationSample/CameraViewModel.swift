@@ -16,12 +16,15 @@ public class CameraViewModel: NSObject, ObservableObject {
     @Published public var detectedHands: [VNHumanHandPoseObservation] = []
     @Published public var handPosition: (x: Double, y: Double)? = nil
     @Published public var animationState: HandAnimationState = .idle
-    @Published public var blurSource: BlurSource = .hand {
+    @Published public var analysisMode: AnalysisMode = .handPosition {
         didSet {
-            updateBlurFilter()
+            updateFiltersForCurrentMode()
         }
     }
     @Published public var displayCIImage: CIImage?
+    @Published public var handSpeed: Double = 0.0
+    @Published public var handSpread: Double = 0.0
+    @Published public var detectedFingerCount: Int = 0
 
     public let cameraManager: CameraManager
     public let handPoseCollector: HandPoseDataCollector
@@ -29,14 +32,138 @@ public class CameraViewModel: NSObject, ObservableObject {
     @Published public var audioPlayer: AudioPlayer
 
     private var cameraScene: VideoScene?
-    private var blurFilterFramework: GaussianBlur?
-    private var brightnessFilterFramework: ColorAdjustment?
-    private var audioBlurFilterFramework: GaussianBlur?
-    private var handBlurFilterFramework: GaussianBlur?
+    private var modeFilters: [AnalysisMode: [Filter]] = [:]
+    private var previousMetricsPosition: (x: Double, y: Double)?
+    private var previousMetricsTimestamp: TimeInterval?
+    private static let temporalAudioMaxFrameOffset: Double = 48.0
 
-    public enum BlurSource {
-        case hand
+    public enum AnalysisMode: String, CaseIterable, Identifiable {
+        case handPosition
         case audio
+        case temporalAudio
+        case handDistance
+        case handHeight
+        case handVelocity
+        case fingerCount
+        case handStability
+        case handSpread
+
+        public var id: String { rawValue }
+
+        public var displayName: String {
+            switch self {
+            case .handPosition:
+                return "Hand Position"
+            case .audio:
+                return "Audio"
+            case .temporalAudio:
+                return "Temporal Audio"
+            case .handDistance:
+                return "Hand Distance"
+            case .handHeight:
+                return "Hand Height"
+            case .handVelocity:
+                return "Hand Velocity"
+            case .fingerCount:
+                return "Finger Count"
+            case .handStability:
+                return "Hand Stability"
+            case .handSpread:
+                return "Hand Spread"
+            }
+        }
+
+        public var usesAudioInput: Bool {
+            self == .audio || self == .temporalAudio
+        }
+    }
+
+    public var isAudioMode: Bool {
+        analysisMode.usesAudioInput
+    }
+
+    public var currentModeMetrics: [(label: String, value: String)] {
+        if analysisMode.usesAudioInput {
+            let amplitude = Double(audioPlayer.currentAmplitude)
+            if analysisMode == .audio {
+                return [("Amplitude", String(format: "%.2f", amplitude))]
+            }
+
+            let maxOffset = Int((amplitude * Self.temporalAudioMaxFrameOffset).rounded())
+            return [
+                ("Amplitude", String(format: "%.2f", amplitude)),
+                ("Max Frame Offset", "\(maxOffset)"),
+                ("Noise Scale", "2.0"),
+                ("Flow Speed", "0.0"),
+                ("Input Frame", "1024")
+            ]
+        }
+
+        guard let position = handPosition else {
+            return [("Status", "No hand detected")]
+        }
+
+        let distance = normalizedDistance(fromCenterFor: position)
+
+        switch analysisMode {
+        case .handPosition:
+            return [
+                ("X Position", String(format: "%.2f", position.x)),
+                ("Y Position", String(format: "%.2f", position.y)),
+                ("Blur Radius", String(format: "%.1f px", position.x * 20.0)),
+                ("Brightness", String(format: "%.2f", position.y - 0.5))
+            ]
+        case .audio:
+            return [("Amplitude", String(format: "%.2f", audioPlayer.currentAmplitude))]
+        case .temporalAudio:
+            let amplitude = Double(audioPlayer.currentAmplitude)
+            let maxOffset = Int((amplitude * Self.temporalAudioMaxFrameOffset).rounded())
+            return [
+                ("Amplitude", String(format: "%.2f", amplitude)),
+                ("Max Frame Offset", "\(maxOffset)"),
+                ("Noise Scale", "2.0"),
+                ("Flow Speed", "0.0"),
+                ("Input Frame", "1024")
+            ]
+        case .handDistance:
+            return [
+                ("Distance", String(format: "%.2f", distance)),
+                ("Blur Radius", String(format: "%.1f px", distance * 24.0)),
+                ("Contrast", String(format: "%.2f", 0.8 + (distance * 0.8)))
+            ]
+        case .handHeight:
+            return [
+                ("Height", String(format: "%.2f", position.y)),
+                ("Blur Radius", String(format: "%.1f px", position.y * 18.0)),
+                ("Brightness", String(format: "%.2f", (position.y * 0.7) - 0.35))
+            ]
+        case .handVelocity:
+            return [
+                ("Speed", String(format: "%.2f", handSpeed)),
+                ("Blur Radius", String(format: "%.1f px", handSpeed * 30.0)),
+                ("Saturation", String(format: "%.2f", 0.7 + (handSpeed * 1.1)))
+            ]
+        case .fingerCount:
+            let normalizedCount = Double(detectedFingerCount) / 5.0
+            return [
+                ("Finger Count", "\(detectedFingerCount) / 5"),
+                ("Blur Radius", String(format: "%.1f px", normalizedCount * 22.0)),
+                ("Saturation", String(format: "%.2f", 0.8 + (normalizedCount * 1.2)))
+            ]
+        case .handStability:
+            let stability = max(0.0, 1.0 - handSpeed)
+            return [
+                ("Stability", String(format: "%.0f%%", stability * 100.0)),
+                ("Speed", String(format: "%.2f", handSpeed)),
+                ("Blur Radius", String(format: "%.1f px", (1.0 - stability) * 20.0))
+            ]
+        case .handSpread:
+            return [
+                ("Spread", String(format: "%.2f", handSpread)),
+                ("Blur Radius", String(format: "%.1f px", handSpread * 20.0)),
+                ("Brightness", String(format: "%.2f", (handSpread * 0.45) - 0.2))
+            ]
+        }
     }
 
     override public init() {
@@ -61,9 +188,9 @@ public class CameraViewModel: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 self?.updateAnimationState(from: observations)
                 self?.detectedHands = observations
-                self?.handPosition = self?.handPoseCollector.getNormalizedHandPosition()
-                
-                
+                let position = self?.handPoseCollector.getNormalizedHandPosition()
+                self?.handPosition = position
+                self?.updateHandMetrics(observations: observations, position: position)
             }
         }
 
@@ -72,15 +199,7 @@ public class CameraViewModel: NSObject, ObservableObject {
     }
 
     private func setupScene() {
-        // Create the filter group with blur and brightness filters
-        var filters: [Filter] = []
-        if let blur = blurFilterFramework {
-            filters.append(blur)
-        }
-        if let brightness = brightnessFilterFramework {
-            filters.append(brightness)
-        }
-//        filterGroup = LayerGroup(groups: [], layers: [], filters: filters, mask: nil)
+        let filters = modeFilters[analysisMode] ?? []
 
         // Create a surface with the camera source
         let surface = Surface(source: cameraSource, frame: CGRect(x: 0, y: 0, width: 1920, height: 1080), rotation: 0)
@@ -180,81 +299,406 @@ public class CameraViewModel: NSObject, ObservableObject {
     }
 
     private func setupFilters() {
-        // Create hand position blur animator
         let handBlurTween = HandPositionTweenFunction(
             collector: handPoseCollector,
             duration: 1.0,
             coordinate: .x
         )
-        let handBlurAnimator = FilterAnimator(
-            type: .SingleValue,
-            animationProperty: .radius,
-            startValue: 0.0,
-            endValue: 20.0,
-            startTime: 0.0,
-            endTime: 1.0,
-            tweenFunctionProvider: handBlurTween
-        )
-
-        // Create audio amplitude blur animator
-        let audioBlurTween = AudioAmplitudeTweenFunction(audioPlayer: audioPlayer)
-        let audioBlurAnimator = FilterAnimator(
-            type: .SingleValue,
-            animationProperty: .radius,
-            startValue: 0.0,
-            endValue: 20.0,
-            startTime: 0.0,
-            endTime: 1.0,
-            tweenFunctionProvider: audioBlurTween
-        )
-
-        // Create brightness animator driven by hand Y position
-        let brightnessTween = HandPositionTweenFunction(
+        let handHeightTween = HandPositionTweenFunction(
             collector: handPoseCollector,
             duration: 1.0,
             coordinate: .y
         )
-        let brightnessAnimator = FilterAnimator(
-            type: .SingleValue,
-            animationProperty: .brightness,
-            startValue: -0.5,
-            endValue: 0.5,
-            startTime: 0.0,
-            endTime: 1.0,
-            tweenFunctionProvider: brightnessTween
+        let handDistanceTween = HandPositionTweenFunction(
+            collector: handPoseCollector,
+            duration: 1.0,
+            coordinate: .distance
         )
+        let audioBlurTween = AudioAmplitudeTweenFunction(audioPlayer: audioPlayer)
+        let speedTween = LiveMetricTweenFunction { [weak self] in
+            self?.handSpeed ?? 0.0
+        }
+        let fingerCountTween = LiveMetricTweenFunction { [weak self] in
+            Double(self?.detectedFingerCount ?? 0) / 5.0
+        }
+        let spreadTween = LiveMetricTweenFunction { [weak self] in
+            self?.handSpread ?? 0.0
+        }
+        let stabilityTween = LiveMetricTweenFunction { [weak self] in
+            1.0 - (self?.handSpeed ?? 0.0)
+        }
 
-        // Create both blur filters
-        handBlurFilterFramework = GaussianBlur(radius: 0.0, filterAnimators: [handBlurAnimator])
-        audioBlurFilterFramework = GaussianBlur(radius: 0.0, filterAnimators: [audioBlurAnimator])
+        let handPositionFilters: [Filter] = [
+            GaussianBlur(radius: 0.0, filterAnimators: [
+                FilterAnimator(
+                    type: .SingleValue,
+                    animationProperty: .radius,
+                    startValue: 0.0,
+                    endValue: 20.0,
+                    startTime: 0.0,
+                    endTime: 1.0,
+                    tweenFunctionProvider: handBlurTween
+                )
+            ]),
+            ColorAdjustment(
+                brightness: 0.0,
+                contrast: 1.0,
+                saturation: 1.0,
+                filterAnimators: [
+                    FilterAnimator(
+                        type: .SingleValue,
+                        animationProperty: .brightness,
+                        startValue: -0.5,
+                        endValue: 0.5,
+                        startTime: 0.0,
+                        endTime: 1.0,
+                        tweenFunctionProvider: handHeightTween
+                    )
+                ]
+            )
+        ]
 
-        // Start with hand blur
-        blurFilterFramework = handBlurFilterFramework
+        let audioFilters: [Filter] = [
+            GaussianBlur(radius: 0.0, filterAnimators: [
+                FilterAnimator(
+                    type: .SingleValue,
+                    animationProperty: .radius,
+                    startValue: 0.0,
+                    endValue: 20.0,
+                    startTime: 0.0,
+                    endTime: 1.0,
+                    tweenFunctionProvider: audioBlurTween
+                )
+            ])
+        ]
 
-        // Create brightness filter
-        brightnessFilterFramework = ColorAdjustment(
-            brightness: 0.0,
-            contrast: 1.0,
-            saturation: 1.0,
-            filterAnimators: [brightnessAnimator]
-        )
+        let temporalAudioFilters: [Filter] = [
+            PerlinFlowFieldAtlasFilter(
+                maxFrameOffset: Int(Self.temporalAudioMaxFrameOffset.rounded()),
+                noiseScale: 2.0,
+                flowSpeed: 0.0,
+                inputFrameSize: CGSize(width: 1024, height: 1024),
+                filterAnimators: [
+                    FilterAnimator(
+                        type: .SingleValue,
+                        animationProperty: .intensity,
+                        startValue: 0.0,
+                        endValue: Self.temporalAudioMaxFrameOffset,
+                        startTime: 0.0,
+                        endTime: 1.0,
+                        tweenFunctionProvider: audioBlurTween
+                    )
+                ]
+            )
+        ]
+
+        let handDistanceFilters: [Filter] = [
+            GaussianBlur(radius: 0.0, filterAnimators: [
+                FilterAnimator(
+                    type: .SingleValue,
+                    animationProperty: .radius,
+                    startValue: 0.0,
+                    endValue: 24.0,
+                    startTime: 0.0,
+                    endTime: 1.0,
+                    tweenFunctionProvider: handDistanceTween
+                )
+            ]),
+            ColorAdjustment(
+                brightness: 0.0,
+                contrast: 1.0,
+                saturation: 1.0,
+                filterAnimators: [
+                    FilterAnimator(
+                        type: .SingleValue,
+                        animationProperty: .contrast,
+                        startValue: 0.8,
+                        endValue: 1.6,
+                        startTime: 0.0,
+                        endTime: 1.0,
+                        tweenFunctionProvider: handDistanceTween
+                    )
+                ]
+            )
+        ]
+
+        let handHeightFilters: [Filter] = [
+            GaussianBlur(radius: 0.0, filterAnimators: [
+                FilterAnimator(
+                    type: .SingleValue,
+                    animationProperty: .radius,
+                    startValue: 0.0,
+                    endValue: 18.0,
+                    startTime: 0.0,
+                    endTime: 1.0,
+                    tweenFunctionProvider: handHeightTween
+                )
+            ]),
+            ColorAdjustment(
+                brightness: 0.0,
+                contrast: 1.0,
+                saturation: 1.0,
+                filterAnimators: [
+                    FilterAnimator(
+                        type: .SingleValue,
+                        animationProperty: .brightness,
+                        startValue: -0.35,
+                        endValue: 0.35,
+                        startTime: 0.0,
+                        endTime: 1.0,
+                        tweenFunctionProvider: handHeightTween
+                    )
+                ]
+            )
+        ]
+
+        let handVelocityFilters: [Filter] = [
+            GaussianBlur(radius: 0.0, filterAnimators: [
+                FilterAnimator(
+                    type: .SingleValue,
+                    animationProperty: .radius,
+                    startValue: 0.0,
+                    endValue: 30.0,
+                    startTime: 0.0,
+                    endTime: 1.0,
+                    tweenFunctionProvider: speedTween
+                )
+            ]),
+            ColorAdjustment(
+                brightness: 0.0,
+                contrast: 1.0,
+                saturation: 1.0,
+                filterAnimators: [
+                    FilterAnimator(
+                        type: .SingleValue,
+                        animationProperty: .saturation,
+                        startValue: 0.7,
+                        endValue: 1.8,
+                        startTime: 0.0,
+                        endTime: 1.0,
+                        tweenFunctionProvider: speedTween
+                    )
+                ]
+            )
+        ]
+
+        let fingerCountFilters: [Filter] = [
+            GaussianBlur(radius: 0.0, filterAnimators: [
+                FilterAnimator(
+                    type: .SingleValue,
+                    animationProperty: .radius,
+                    startValue: 0.0,
+                    endValue: 22.0,
+                    startTime: 0.0,
+                    endTime: 1.0,
+                    tweenFunctionProvider: fingerCountTween
+                )
+            ]),
+            ColorAdjustment(
+                brightness: 0.0,
+                contrast: 1.0,
+                saturation: 1.0,
+                filterAnimators: [
+                    FilterAnimator(
+                        type: .SingleValue,
+                        animationProperty: .contrast,
+                        startValue: 0.9,
+                        endValue: 1.4,
+                        startTime: 0.0,
+                        endTime: 1.0,
+                        tweenFunctionProvider: fingerCountTween
+                    ),
+                    FilterAnimator(
+                        type: .SingleValue,
+                        animationProperty: .saturation,
+                        startValue: 0.8,
+                        endValue: 2.0,
+                        startTime: 0.0,
+                        endTime: 1.0,
+                        tweenFunctionProvider: fingerCountTween
+                    )
+                ]
+            )
+        ]
+
+        let handStabilityFilters: [Filter] = [
+            GaussianBlur(radius: 0.0, filterAnimators: [
+                FilterAnimator(
+                    type: .SingleValue,
+                    animationProperty: .radius,
+                    startValue: 20.0,
+                    endValue: 0.0,
+                    startTime: 0.0,
+                    endTime: 1.0,
+                    tweenFunctionProvider: stabilityTween
+                )
+            ]),
+            ColorAdjustment(
+                brightness: 0.0,
+                contrast: 1.0,
+                saturation: 1.0,
+                filterAnimators: [
+                    FilterAnimator(
+                        type: .SingleValue,
+                        animationProperty: .contrast,
+                        startValue: 0.9,
+                        endValue: 1.3,
+                        startTime: 0.0,
+                        endTime: 1.0,
+                        tweenFunctionProvider: stabilityTween
+                    )
+                ]
+            )
+        ]
+
+        let handSpreadFilters: [Filter] = [
+            GaussianBlur(radius: 0.0, filterAnimators: [
+                FilterAnimator(
+                    type: .SingleValue,
+                    animationProperty: .radius,
+                    startValue: 0.0,
+                    endValue: 20.0,
+                    startTime: 0.0,
+                    endTime: 1.0,
+                    tweenFunctionProvider: spreadTween
+                )
+            ]),
+            ColorAdjustment(
+                brightness: 0.0,
+                contrast: 1.0,
+                saturation: 1.0,
+                filterAnimators: [
+                    FilterAnimator(
+                        type: .SingleValue,
+                        animationProperty: .brightness,
+                        startValue: -0.2,
+                        endValue: 0.25,
+                        startTime: 0.0,
+                        endTime: 1.0,
+                        tweenFunctionProvider: spreadTween
+                    )
+                ]
+            )
+        ]
+
+        modeFilters = [
+            .handPosition: handPositionFilters,
+            .audio: audioFilters,
+            .temporalAudio: temporalAudioFilters,
+            .handDistance: handDistanceFilters,
+            .handHeight: handHeightFilters,
+            .handVelocity: handVelocityFilters,
+            .fingerCount: fingerCountFilters,
+            .handStability: handStabilityFilters,
+            .handSpread: handSpreadFilters
+        ]
     }
 
-    private func updateBlurFilter() {
-        // Swap the blur filter based on the selected source
-        blurFilterFramework = blurSource == .audio ? audioBlurFilterFramework : handBlurFilterFramework
+    private func updateFiltersForCurrentMode() {
+        cameraScene?.group.filters = modeFilters[analysisMode] ?? []
+    }
 
-        // Update the filter group
-        var filters: [Filter] = []
-        if let blur = blurFilterFramework {
-            filters.append(blur)
+    private func updateHandMetrics(
+        observations: [VNHumanHandPoseObservation],
+        position: (x: Double, y: Double)?
+    ) {
+        if let observation = observations.first {
+            detectedFingerCount = countExtendedFingers(from: observation)
+            handSpread = normalizedHandSpread(from: observation)
+        } else {
+            detectedFingerCount = 0
+            handSpread = 0.0
         }
-        if blurSource != .audio,
-           let brightness = brightnessFilterFramework {
-            filters.append(brightness)
+
+        guard let position else {
+            handSpeed = 0.0
+            previousMetricsPosition = nil
+            previousMetricsTimestamp = nil
+            return
         }
-        
-        cameraScene?.group.filters = filters
+
+        let now = Date().timeIntervalSinceReferenceDate
+        if let previousPosition = previousMetricsPosition, let previousTimestamp = previousMetricsTimestamp {
+            let deltaTime = max(now - previousTimestamp, 1.0 / 120.0)
+            let dx = position.x - previousPosition.x
+            let dy = position.y - previousPosition.y
+            let rawSpeed = sqrt(dx * dx + dy * dy) / deltaTime
+            let normalizedSpeed = clamp(rawSpeed / 2.0)
+            handSpeed = (handSpeed * 0.75) + (normalizedSpeed * 0.25)
+        } else {
+            handSpeed = 0.0
+        }
+
+        previousMetricsPosition = position
+        previousMetricsTimestamp = now
+    }
+
+    private func normalizedDistance(fromCenterFor position: (x: Double, y: Double)) -> Double {
+        let dx = position.x - 0.5
+        let dy = position.y - 0.5
+        return clamp(sqrt(dx * dx + dy * dy) / 0.707)
+    }
+
+    private func recognizedPoint(
+        _ joint: VNHumanHandPoseObservation.JointName,
+        from observation: VNHumanHandPoseObservation
+    ) -> VNRecognizedPoint? {
+        guard let point = try? observation.recognizedPoint(joint), point.confidence > 0.25 else {
+            return nil
+        }
+        return point
+    }
+
+    private func normalizedHandSpread(from observation: VNHumanHandPoseObservation) -> Double {
+        guard
+            let indexTip = recognizedPoint(.indexTip, from: observation),
+            let littleTip = recognizedPoint(.littleTip, from: observation)
+        else {
+            return 0.0
+        }
+
+        let dx = Double(indexTip.location.x - littleTip.location.x)
+        let dy = Double(indexTip.location.y - littleTip.location.y)
+        let distance = sqrt(dx * dx + dy * dy)
+
+        return clamp(distance / 0.55)
+    }
+
+    private func countExtendedFingers(from observation: VNHumanHandPoseObservation) -> Int {
+        func isFingerExtended(
+            tip: VNHumanHandPoseObservation.JointName,
+            pip: VNHumanHandPoseObservation.JointName
+        ) -> Bool {
+            guard
+                let tipPoint = recognizedPoint(tip, from: observation),
+                let pipPoint = recognizedPoint(pip, from: observation)
+            else {
+                return false
+            }
+
+            return tipPoint.location.y > pipPoint.location.y + 0.02
+        }
+
+        var count = 0
+
+        if isFingerExtended(tip: .indexTip, pip: .indexPIP) { count += 1 }
+        if isFingerExtended(tip: .middleTip, pip: .middlePIP) { count += 1 }
+        if isFingerExtended(tip: .ringTip, pip: .ringPIP) { count += 1 }
+        if isFingerExtended(tip: .littleTip, pip: .littlePIP) { count += 1 }
+
+        if
+            let thumbTip = recognizedPoint(.thumbTip, from: observation),
+            let thumbIP = recognizedPoint(.thumbIP, from: observation),
+            abs(thumbTip.location.x - thumbIP.location.x) > 0.06 || thumbTip.location.y > thumbIP.location.y + 0.03
+        {
+            count += 1
+        }
+
+        return count
+    }
+
+    private func clamp(_ value: Double, min minimum: Double = 0.0, max maximum: Double = 1.0) -> Double {
+        Swift.max(minimum, Swift.min(maximum, value))
     }
 
     public func startCamera() {
@@ -450,5 +894,18 @@ public class AudioAmplitudeTweenFunction: TweenFunctionProvider {
     public func tweenValue(input: Double) -> Double {
         // Get current audio amplitude (0.0 to 1.0)
         return Double(audioPlayer.currentAmplitude)
+    }
+}
+
+public class LiveMetricTweenFunction: TweenFunctionProvider {
+    private let valueProvider: () -> Double
+
+    public init(valueProvider: @escaping () -> Double) {
+        self.valueProvider = valueProvider
+    }
+
+    public func tweenValue(input: Double) -> Double {
+        let value = valueProvider()
+        return Swift.max(0.0, Swift.min(1.0, value))
     }
 }
