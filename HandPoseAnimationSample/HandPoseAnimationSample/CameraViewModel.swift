@@ -11,6 +11,7 @@ import Vision
 import AVFoundation
 import CoreImage
 import MediaPlayer
+import Photos
 
 public class CameraViewModel: NSObject, ObservableObject {
     @Published public var detectedHands: [VNHumanHandPoseObservation] = []
@@ -25,6 +26,9 @@ public class CameraViewModel: NSObject, ObservableObject {
     @Published public var handSpeed: Double = 0.0
     @Published public var handSpread: Double = 0.0
     @Published public var detectedFingerCount: Int = 0
+    @Published public private(set) var isRecordingVideo: Bool = false
+    @Published public private(set) var isSavingRecording: Bool = false
+    @Published public var recordingStatusMessage: String?
 
     public let cameraManager: CameraManager
     public let handPoseCollector: HandPoseDataCollector
@@ -36,6 +40,13 @@ public class CameraViewModel: NSObject, ObservableObject {
     private var previousMetricsPosition: (x: Double, y: Double)?
     private var previousMetricsTimestamp: TimeInterval?
     private static let temporalAudioMaxFrameOffset: Double = 48.0
+    private let recordingStateQueue = DispatchQueue(label: "com.handpose.recording.state")
+    private let recordingColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+    private var movieWriter: MovieWriter?
+    private var recordingOutputURL: URL?
+    private var recordingRenderSize: CGSize = .zero
+    private var recordingStartTime: CMTime?
+    private var recordedFrameCount: Int = 0
 
     public enum AnalysisMode: String, CaseIterable, Identifiable {
         case handPosition
@@ -710,6 +721,9 @@ public class CameraViewModel: NSObject, ObservableObject {
     public func stopCamera() {
         cameraManager.stop()
         handPoseCollector.stop()
+        if isRecordingVideo {
+            stopRecording()
+        }
     }
 
     public func swapCamera() {
@@ -753,6 +767,88 @@ public class CameraViewModel: NSObject, ObservableObject {
                     completion(status == .authorized)
                 }
             }
+        }
+    }
+
+    public func startRecording() {
+        if isRecordingVideo || isSavingRecording {
+            return
+        }
+
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hand-pose-\(timestamp)-\(UUID().uuidString)")
+            .appendingPathExtension("mp4")
+
+        let targetSize = recordingTargetSize(for: displayCIImage?.extent.size ?? CGSize(width: 1920, height: 1080))
+        let writer = MovieWriter(url: outputURL, size: targetSize, transform: .identity)
+        writer.startWriter()
+
+        recordingStateQueue.sync {
+            movieWriter = writer
+            recordingOutputURL = outputURL
+            recordingRenderSize = targetSize
+            recordingStartTime = nil
+            recordedFrameCount = 0
+        }
+
+        isRecordingVideo = true
+        recordingStatusMessage = "Recording…"
+    }
+
+    public func stopRecording() {
+        if !isRecordingVideo {
+            return
+        }
+
+        isRecordingVideo = false
+        isSavingRecording = true
+        recordingStatusMessage = "Saving recording…"
+
+        var writerToFinish: MovieWriter?
+        var outputURL: URL?
+        var frameCount = 0
+
+        recordingStateQueue.sync {
+            writerToFinish = movieWriter
+            outputURL = recordingOutputURL
+            frameCount = recordedFrameCount
+
+            movieWriter = nil
+            recordingOutputURL = nil
+            recordingStartTime = nil
+            recordedFrameCount = 0
+        }
+
+        guard
+            let writer = writerToFinish,
+            let outputURL
+        else {
+            isSavingRecording = false
+            recordingStatusMessage = "Recording failed to finalize."
+            return
+        }
+
+        if frameCount == 0 {
+            isSavingRecording = false
+            recordingStatusMessage = "No frames captured."
+            cleanupRecordingFile(at: outputURL)
+            return
+        }
+
+        writer.finishWriting { [weak self] success in
+            guard let self else { return }
+
+            if !success {
+                DispatchQueue.main.async {
+                    self.isSavingRecording = false
+                    self.recordingStatusMessage = "Failed to write video."
+                    self.cleanupRecordingFile(at: outputURL)
+                }
+                return
+            }
+
+            self.saveRecordingToPhotoLibrary(fileURL: outputURL)
         }
     }
 
