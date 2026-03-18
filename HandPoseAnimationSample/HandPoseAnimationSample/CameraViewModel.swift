@@ -715,8 +715,8 @@ public class CameraViewModel: NSObject, ObservableObject {
         let extent = CGRect(origin: .zero, size: size)
         let gradient = CIFilter.radialGradient()
         gradient.center = CGPoint(x: size.width * 0.5, y: size.height * 0.5)
-        gradient.radius0 = min(size.width, size.height) * 0.08
-        gradient.radius1 = min(size.width, size.height) * 0.52
+        gradient.radius0 = Float(min(size.width, size.height)) * 0.08
+        gradient.radius1 = Float(min(size.width, size.height)) * 0.52
         gradient.color0 = CIColor(red: 1.0, green: 0.1, blue: 0.1, alpha: 1.0)
         gradient.color1 = CIColor.black
 
