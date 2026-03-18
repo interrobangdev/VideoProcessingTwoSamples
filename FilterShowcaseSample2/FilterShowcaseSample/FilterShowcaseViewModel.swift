@@ -50,6 +50,7 @@ final class FilterShowcaseViewModel: NSObject, ObservableObject {
     }
 
     @Published var errorMessage: String?
+    @Published private(set) var isFrontCamera: Bool = false
 
     @Published var mode: Mode = .filters {
         didSet {
@@ -169,6 +170,14 @@ final class FilterShowcaseViewModel: NSObject, ObservableObject {
         cameraManager.stop()
     }
 
+    #if os(iOS)
+    func swapCamera() {
+        let nextPosition: AVCaptureDevice.Position = isFrontCamera ? .back : .front
+        cameraManager.swapCamera(position: nextPosition)
+        isFrontCamera = cameraManager.devicePosition == .front
+    }
+    #endif
+
     private func setupScene() {
         let cameraSurface = Surface(
             source: cameraSource,
@@ -284,6 +293,14 @@ final class FilterShowcaseViewModel: NSObject, ObservableObject {
                     y: size.height * (values["centerY"] ?? 0.5)
                 )
             }
+        case "mirror":
+            if let filter = firstFilter as? Mirror {
+                filter.point = CGPoint(
+                    x: size.width * (values["centerX"] ?? 0.5),
+                    y: size.height * (values["centerY"] ?? 0.5)
+                )
+                filter.angle = values["angle"] ?? filter.angle
+            }
         case "translate":
             if let filter = firstFilter as? Translate {
                 filter.translation = CGPoint(
@@ -378,6 +395,23 @@ final class FilterShowcaseViewModel: NSObject, ObservableObject {
                 filter.maxFrameOffset = maxOffset
                 filter.inputFrameSize = CGSize(width: CGFloat(side), height: CGFloat(side))
                 filter.heatmapImage = Self.radialHeatmapImage(size: size)
+            }
+        case "linear_heatmap_frame_offset_atlas":
+            if let filter = firstFilter as? HeatmapFrameOffsetAtlasFilter {
+                let maxOffset = max(0, Int((values["maxOffset"] ?? Double(filter.maxFrameOffset)).rounded()))
+                let side = max(1, Int((values["frameSize"] ?? Double(Int(filter.inputFrameSize.width))).rounded()))
+                filter.maxFrameOffset = maxOffset
+                filter.inputFrameSize = CGSize(width: CGFloat(side), height: CGFloat(side))
+                filter.heatmapImage = Self.verticalHeatmapImage(size: size)
+            }
+        case "temporal_fade_atlas":
+            if let filter = firstFilter as? TemporalFadeAtlasFilter {
+                let frameCount = max(1, Int((values["frameCount"] ?? Double(filter.frameCount)).rounded()))
+                let frameSpacing = max(1, Int((values["frameSpacing"] ?? Double(filter.frameSpacing)).rounded()))
+                let side = max(1, Int((values["frameSize"] ?? Double(Int(filter.inputFrameSize.width))).rounded()))
+                filter.frameCount = frameCount
+                filter.frameSpacing = frameSpacing
+                filter.inputFrameSize = CGSize(width: CGFloat(side), height: CGFloat(side))
             }
         case "perlin_flow_field_atlas":
             if let filter = firstFilter as? PerlinFlowFieldAtlasFilter {
@@ -531,8 +565,20 @@ private extension FilterShowcaseViewModel {
         let extent = CGRect(origin: .zero, size: size)
         let gradient = CIFilter.radialGradient()
         gradient.center = CGPoint(x: size.width * 0.5, y: size.height * 0.5)
-        gradient.radius0 = min(size.width, size.height) * 0.08
-        gradient.radius1 = min(size.width, size.height) * 0.52
+        gradient.radius0 = Float(min(size.width, size.height)) * 0.08
+        gradient.radius1 = Float(min(size.width, size.height)) * 0.52
+        gradient.color0 = CIColor(red: 1.0, green: 0.1, blue: 0.1, alpha: 1.0)
+        gradient.color1 = CIColor.black
+
+        let fallback = CIImage(color: CIColor.black).cropped(to: extent)
+        return (gradient.outputImage ?? fallback).cropped(to: extent)
+    }
+
+    static func verticalHeatmapImage(size: CGSize) -> CIImage {
+        let extent = CGRect(origin: .zero, size: size)
+        let gradient = CIFilter.linearGradient()
+        gradient.point0 = CGPoint(x: size.width * 0.5, y: size.height)
+        gradient.point1 = CGPoint(x: size.width * 0.5, y: 0)
         gradient.color0 = CIColor(red: 1.0, green: 0.1, blue: 0.1, alpha: 1.0)
         gradient.color1 = CIColor.black
 
@@ -615,6 +661,24 @@ private extension FilterShowcaseViewModel {
                         y: size.height * (values["centerY"] ?? 0.5)
                     )
                     return [Rotate(rotation: values["rotation"] ?? 0.0, centerPoint: center, filterAnimators: [])]
+                }
+            ),
+            ShowcaseEntry(
+                id: "mirror",
+                name: "Mirror",
+                subtitle: "Reflect across a point-and-angle axis",
+                category: "Core",
+                parameters: [
+                    p("centerX", "Center X", 0.0...1.0, 0.5),
+                    p("centerY", "Center Y", 0.0...1.0, 0.5),
+                    p("angle", "Angle", -Double.pi...Double.pi, 0.0)
+                ],
+                makeFilters: { values, size in
+                    let point = CGPoint(
+                        x: size.width * (values["centerX"] ?? 0.5),
+                        y: size.height * (values["centerY"] ?? 0.5)
+                    )
+                    return [Mirror(point: point, angle: values["angle"] ?? 0.0, filterAnimators: [])]
                 }
             ),
             ShowcaseEntry(
@@ -1097,6 +1161,48 @@ private extension FilterShowcaseViewModel {
                     return [HeatmapFrameOffsetAtlasFilter(
                         maxFrameOffset: maxOffset,
                         heatmapImage: radialHeatmapImage(size: size),
+                        inputFrameSize: CGSize(width: CGFloat(side), height: CGFloat(side)),
+                        filterAnimators: []
+                    )]
+                }
+            ),
+            ShowcaseEntry(
+                id: "linear_heatmap_frame_offset_atlas",
+                name: "Linear Heatmap Frame Offset Atlas",
+                subtitle: "Top-to-bottom heatmap drives per-pixel temporal history",
+                category: "Temporal",
+                parameters: [
+                    p("maxOffset", "Max Frame Offset", 0.0...240.0, 48.0, step: 1.0),
+                    p("frameSize", "Input Frame Size", 128.0...2048.0, 1024.0, step: 64.0)
+                ],
+                makeFilters: { values, size in
+                    let maxOffset = max(0, Int((values["maxOffset"] ?? 48.0).rounded()))
+                    let side = max(1, Int((values["frameSize"] ?? 1024.0).rounded()))
+                    return [HeatmapFrameOffsetAtlasFilter(
+                        maxFrameOffset: maxOffset,
+                        heatmapImage: verticalHeatmapImage(size: size),
+                        inputFrameSize: CGSize(width: CGFloat(side), height: CGFloat(side)),
+                        filterAnimators: []
+                    )]
+                }
+            ),
+            ShowcaseEntry(
+                id: "temporal_fade_atlas",
+                name: "Temporal Fade Atlas",
+                subtitle: "Averages spaced frame samples across time",
+                category: "Temporal",
+                parameters: [
+                    p("frameCount", "Frame Count", 1.0...15.0, 8.0, step: 1.0),
+                    p("frameSpacing", "Frame Spacing", 1.0...12.0, 2.0, step: 1.0),
+                    p("frameSize", "Input Frame Size", 128.0...2048.0, 1024.0, step: 64.0)
+                ],
+                makeFilters: { values, _ in
+                    let frameCount = max(1, Int((values["frameCount"] ?? 8.0).rounded()))
+                    let frameSpacing = max(1, Int((values["frameSpacing"] ?? 2.0).rounded()))
+                    let side = max(1, Int((values["frameSize"] ?? 1024.0).rounded()))
+                    return [TemporalFadeAtlasFilter(
+                        frameCount: frameCount,
+                        frameSpacing: frameSpacing,
                         inputFrameSize: CGSize(width: CGFloat(side), height: CGFloat(side)),
                         filterAnimators: []
                     )]

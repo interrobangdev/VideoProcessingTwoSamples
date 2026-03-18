@@ -43,6 +43,9 @@ public class CameraViewModel: NSObject, ObservableObject {
     private static let temporalAudioMaxFrameOffset: Double = 48.0
     private static let temporalAtlasAudioMaxFrameOffset: Double = 48.0
     private static let heatmapAtlasAudioMaxFrameOffset: Double = 48.0
+    private static let linearHeatmapAtlasAudioMaxFrameOffset: Double = 48.0
+    private static let temporalFadeAudioMaxFrameCount: Double = 15.0
+    private static let temporalFadeAudioFrameSpacing: Int = 2
     private let recordingStateQueue = DispatchQueue(label: "com.handpose.recording.state")
     private let recordingColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
     private var movieWriter: MovieWriter?
@@ -57,6 +60,8 @@ public class CameraViewModel: NSObject, ObservableObject {
         case temporalAudio
         case temporalAtlasAudio
         case heatmapAtlasAudio
+        case linearHeatmapAtlasAudio
+        case temporalFadeAudio
         case handDistance
         case handHeight
         case handVelocity
@@ -78,6 +83,10 @@ public class CameraViewModel: NSObject, ObservableObject {
                 return "Temporal Atlas Audio"
             case .heatmapAtlasAudio:
                 return "Heatmap Atlas Audio"
+            case .linearHeatmapAtlasAudio:
+                return "Linear Heatmap Atlas Audio"
+            case .temporalFadeAudio:
+                return "Temporal Fade Audio"
             case .handDistance:
                 return "Hand Distance"
             case .handHeight:
@@ -94,7 +103,7 @@ public class CameraViewModel: NSObject, ObservableObject {
         }
 
         public var usesAudioInput: Bool {
-            self == .audio || self == .temporalAudio || self == .temporalAtlasAudio || self == .heatmapAtlasAudio
+            self == .audio || self == .temporalAudio || self == .temporalAtlasAudio || self == .heatmapAtlasAudio || self == .linearHeatmapAtlasAudio || self == .temporalFadeAudio
         }
     }
 
@@ -133,6 +142,24 @@ public class CameraViewModel: NSObject, ObservableObject {
                     ("Max Frame Offset", "\(maxOffset)"),
                     ("Filter", "Heatmap Atlas"),
                     ("Heatmap", "Radial Gradient"),
+                    ("Input Frame", "1024")
+                ]
+            case .linearHeatmapAtlasAudio:
+                let maxOffset = Int((amplitude * Self.linearHeatmapAtlasAudioMaxFrameOffset).rounded())
+                return [
+                    ("Amplitude", String(format: "%.2f", amplitude)),
+                    ("Max Frame Offset", "\(maxOffset)"),
+                    ("Filter", "Heatmap Atlas"),
+                    ("Heatmap", "Vertical Gradient"),
+                    ("Input Frame", "1024")
+                ]
+            case .temporalFadeAudio:
+                let frameCount = max(1, Int((amplitude * (Self.temporalFadeAudioMaxFrameCount - 1.0)).rounded()) + 1)
+                return [
+                    ("Amplitude", String(format: "%.2f", amplitude)),
+                    ("Frame Count", "\(frameCount)"),
+                    ("Frame Spacing", "\(Self.temporalFadeAudioFrameSpacing)"),
+                    ("Filter", "Temporal Fade Atlas"),
                     ("Input Frame", "1024")
                 ]
             default:
@@ -192,7 +219,7 @@ public class CameraViewModel: NSObject, ObservableObject {
                 ("Blur Radius", String(format: "%.1f px", handSpread * 20.0)),
                 ("Brightness", String(format: "%.2f", (handSpread * 0.45) - 0.2))
             ]
-        case .audio, .temporalAudio, .temporalAtlasAudio, .heatmapAtlasAudio:
+        case .audio, .temporalAudio, .temporalAtlasAudio, .heatmapAtlasAudio, .linearHeatmapAtlasAudio, .temporalFadeAudio:
             return [("Amplitude", String(format: "%.2f", Double(audioPlayer.currentAmplitude)))]
         }
     }
@@ -404,6 +431,7 @@ public class CameraViewModel: NSObject, ObservableObject {
         ]
 
         let radialHeatmap = Self.radialHeatmapImage(size: CGSize(width: 1024, height: 1024))
+        let verticalHeatmap = Self.verticalHeatmapImage(size: CGSize(width: 1024, height: 1024))
 
         let temporalAudioFilters: [Filter] = [
             PerlinFlowFieldAtlasFilter(
@@ -436,6 +464,44 @@ public class CameraViewModel: NSObject, ObservableObject {
                         animationProperty: .intensity,
                         startValue: 0.0,
                         endValue: Self.heatmapAtlasAudioMaxFrameOffset,
+                        startTime: 0.0,
+                        endTime: 1.0,
+                        tweenFunctionProvider: audioBlurTween
+                    )
+                ]
+            )
+        ]
+
+        let linearHeatmapAtlasAudioFilters: [Filter] = [
+            HeatmapFrameOffsetAtlasFilter(
+                maxFrameOffset: Int(Self.linearHeatmapAtlasAudioMaxFrameOffset.rounded()),
+                heatmapImage: verticalHeatmap,
+                inputFrameSize: CGSize(width: 1024, height: 1024),
+                filterAnimators: [
+                    FilterAnimator(
+                        type: .SingleValue,
+                        animationProperty: .intensity,
+                        startValue: 0.0,
+                        endValue: Self.linearHeatmapAtlasAudioMaxFrameOffset,
+                        startTime: 0.0,
+                        endTime: 1.0,
+                        tweenFunctionProvider: audioBlurTween
+                    )
+                ]
+            )
+        ]
+
+        let temporalFadeAudioFilters: [Filter] = [
+            TemporalFadeAtlasFilter(
+                frameCount: Int(Self.temporalFadeAudioMaxFrameCount.rounded()),
+                frameSpacing: Self.temporalFadeAudioFrameSpacing,
+                inputFrameSize: CGSize(width: 1024, height: 1024),
+                filterAnimators: [
+                    FilterAnimator(
+                        type: .SingleValue,
+                        animationProperty: .frameCount,
+                        startValue: 1.0,
+                        endValue: Self.temporalFadeAudioMaxFrameCount,
                         startTime: 0.0,
                         endTime: 1.0,
                         tweenFunctionProvider: audioBlurTween
@@ -657,6 +723,8 @@ public class CameraViewModel: NSObject, ObservableObject {
             .temporalAudio: temporalAudioFilters,
             .temporalAtlasAudio: temporalAtlasAudioFilters,
             .heatmapAtlasAudio: heatmapAtlasAudioFilters,
+            .linearHeatmapAtlasAudio: linearHeatmapAtlasAudioFilters,
+            .temporalFadeAudio: temporalFadeAudioFilters,
             .handDistance: handDistanceFilters,
             .handHeight: handHeightFilters,
             .handVelocity: handVelocityFilters,
@@ -717,6 +785,18 @@ public class CameraViewModel: NSObject, ObservableObject {
         gradient.center = CGPoint(x: size.width * 0.5, y: size.height * 0.5)
         gradient.radius0 = Float(min(size.width, size.height)) * 0.08
         gradient.radius1 = Float(min(size.width, size.height)) * 0.52
+        gradient.color0 = CIColor(red: 1.0, green: 0.1, blue: 0.1, alpha: 1.0)
+        gradient.color1 = CIColor.black
+
+        let fallback = CIImage(color: CIColor.black).cropped(to: extent)
+        return (gradient.outputImage ?? fallback).cropped(to: extent)
+    }
+
+    private static func verticalHeatmapImage(size: CGSize) -> CIImage {
+        let extent = CGRect(origin: .zero, size: size)
+        let gradient = CIFilter.linearGradient()
+        gradient.point0 = CGPoint(x: size.width * 0.5, y: size.height)
+        gradient.point1 = CGPoint(x: size.width * 0.5, y: 0)
         gradient.color0 = CIColor(red: 1.0, green: 0.1, blue: 0.1, alpha: 1.0)
         gradient.color1 = CIColor.black
 
@@ -922,6 +1002,16 @@ public class CameraViewModel: NSObject, ObservableObject {
                 return
             }
 
+            let fileSize = self.recordingFileSize(at: outputURL)
+            guard FileManager.default.fileExists(atPath: outputURL.path), fileSize > 0 else {
+                DispatchQueue.main.async {
+                    self.isSavingRecording = false
+                    self.recordingStatusMessage = "Recorded file was empty."
+                    self.cleanupRecordingFile(at: outputURL)
+                }
+                return
+            }
+
             self.saveRecordingToPhotoLibrary(fileURL: outputURL)
         }
     }
@@ -1013,7 +1103,10 @@ public class CameraViewModel: NSObject, ObservableObject {
             }
 
             PHPhotoLibrary.shared().performChanges({
-                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: fileURL)
+                let request = PHAssetCreationRequest.forAsset()
+                let options = PHAssetResourceCreationOptions()
+                options.shouldMoveFile = false
+                request.addResource(with: .video, fileURL: fileURL, options: options)
             }) { success, error in
                 DispatchQueue.main.async {
                     self.isSavingRecording = false
@@ -1030,18 +1123,51 @@ public class CameraViewModel: NSObject, ObservableObject {
 
     private func requestPhotoLibraryAddAccess(completion: @escaping (Bool) -> Void) {
         if #available(iOS 14.0, *) {
+            let currentStatus = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+            if currentStatus == .authorized || currentStatus == .limited {
+                DispatchQueue.main.async {
+                    completion(true)
+                }
+                return
+            }
+            if currentStatus == .denied || currentStatus == .restricted {
+                DispatchQueue.main.async {
+                    completion(false)
+                }
+                return
+            }
+
             PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
                 DispatchQueue.main.async {
                     completion(status == .authorized || status == .limited)
                 }
             }
         } else {
+            let currentStatus = PHPhotoLibrary.authorizationStatus()
+            if currentStatus == .authorized {
+                DispatchQueue.main.async {
+                    completion(true)
+                }
+                return
+            }
+            if currentStatus == .denied || currentStatus == .restricted {
+                DispatchQueue.main.async {
+                    completion(false)
+                }
+                return
+            }
+
             PHPhotoLibrary.requestAuthorization { status in
                 DispatchQueue.main.async {
                     completion(status == .authorized)
                 }
             }
         }
+    }
+
+    private func recordingFileSize(at url: URL) -> Int64 {
+        let values = try? url.resourceValues(forKeys: [.fileSizeKey])
+        return Int64(values?.fileSize ?? 0)
     }
 
     private func cleanupRecordingFile(at url: URL) {

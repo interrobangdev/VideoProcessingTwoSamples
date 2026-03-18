@@ -4,11 +4,12 @@ import VideoProcessingTwo
 
 private struct CameraPreviewView: View {
     @ObservedObject var previewState: FilterShowcasePreviewState
+    let isFrontCamera: Bool
 
     var body: some View {
         Group {
             if let image = previewState.displayCIImage {
-                MetalView(ciImage: image, isFrontCamera: false)
+                MetalView(ciImage: image, isFrontCamera: isFrontCamera)
                     .ignoresSafeArea()
             } else {
                 Color.black
@@ -61,7 +62,10 @@ struct ContentView: View {
     }
 
     private var cameraPreview: some View {
-        CameraPreviewView(previewState: viewModel.previewState)
+        CameraPreviewView(
+            previewState: viewModel.previewState,
+            isFrontCamera: viewModel.isFrontCamera
+        )
     }
 
     private func bottomControls(in proxy: GeometryProxy) -> some View {
@@ -81,6 +85,16 @@ struct ContentView: View {
             ) {
                 togglePanel(.parameters)
             }
+
+            #if os(iOS)
+            panelButton(
+                title: "Camera",
+                systemImage: "arrow.triangle.2.circlepath.camera",
+                isActive: viewModel.isFrontCamera
+            ) {
+                viewModel.swapCamera()
+            }
+            #endif
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
