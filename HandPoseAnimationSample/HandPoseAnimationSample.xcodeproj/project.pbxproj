@@ -419,6 +419,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Need music";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Need a camera";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Need photo library access to save recorded videos.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -453,6 +454,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Need music";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Need a camera";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Need photo library access to save recorded videos.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

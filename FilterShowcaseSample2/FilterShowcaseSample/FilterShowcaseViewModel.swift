@@ -371,6 +371,14 @@ final class FilterShowcaseViewModel: NSObject, ObservableObject {
                 filter.frameOffsets = [offset]
                 filter.inputFrameSize = CGSize(width: CGFloat(side), height: CGFloat(side))
             }
+        case "heatmap_frame_offset_atlas":
+            if let filter = firstFilter as? HeatmapFrameOffsetAtlasFilter {
+                let maxOffset = max(0, Int((values["maxOffset"] ?? Double(filter.maxFrameOffset)).rounded()))
+                let side = max(1, Int((values["frameSize"] ?? Double(Int(filter.inputFrameSize.width))).rounded()))
+                filter.maxFrameOffset = maxOffset
+                filter.inputFrameSize = CGSize(width: CGFloat(side), height: CGFloat(side))
+                filter.heatmapImage = Self.radialHeatmapImage(size: size)
+            }
         case "perlin_flow_field_atlas":
             if let filter = firstFilter as? PerlinFlowFieldAtlasFilter {
                 let maxOffset = max(0, Int((values["maxOffset"] ?? Double(filter.maxFrameOffset)).rounded()))
@@ -517,6 +525,19 @@ private extension FilterShowcaseViewModel {
         controls.saturation = 1.25
         controls.contrast = 1.05
         return (controls.outputImage ?? base).cropped(to: extent)
+    }
+
+    static func radialHeatmapImage(size: CGSize) -> CIImage {
+        let extent = CGRect(origin: .zero, size: size)
+        let gradient = CIFilter.radialGradient()
+        gradient.center = CGPoint(x: size.width * 0.5, y: size.height * 0.5)
+        gradient.radius0 = min(size.width, size.height) * 0.08
+        gradient.radius1 = min(size.width, size.height) * 0.52
+        gradient.color0 = CIColor(red: 1.0, green: 0.1, blue: 0.1, alpha: 1.0)
+        gradient.color1 = CIColor.black
+
+        let fallback = CIImage(color: CIColor.black).cropped(to: extent)
+        return (gradient.outputImage ?? fallback).cropped(to: extent)
     }
 
     static func makeFilterEntries() -> [ShowcaseEntry] {
@@ -1056,6 +1077,26 @@ private extension FilterShowcaseViewModel {
                     return [TemporalTextureAtlasOutputsFilter(
                         frameOffsets: [offset],
                         primaryOutputIndex: 0,
+                        inputFrameSize: CGSize(width: CGFloat(side), height: CGFloat(side)),
+                        filterAnimators: []
+                    )]
+                }
+            ),
+            ShowcaseEntry(
+                id: "heatmap_frame_offset_atlas",
+                name: "Heatmap Frame Offset Atlas",
+                subtitle: "Radial heatmap drives per-pixel temporal history",
+                category: "Temporal",
+                parameters: [
+                    p("maxOffset", "Max Frame Offset", 0.0...240.0, 48.0, step: 1.0),
+                    p("frameSize", "Input Frame Size", 128.0...2048.0, 1024.0, step: 64.0)
+                ],
+                makeFilters: { values, size in
+                    let maxOffset = max(0, Int((values["maxOffset"] ?? 48.0).rounded()))
+                    let side = max(1, Int((values["frameSize"] ?? 1024.0).rounded()))
+                    return [HeatmapFrameOffsetAtlasFilter(
+                        maxFrameOffset: maxOffset,
+                        heatmapImage: radialHeatmapImage(size: size),
                         inputFrameSize: CGSize(width: CGFloat(side), height: CGFloat(side)),
                         filterAnimators: []
                     )]

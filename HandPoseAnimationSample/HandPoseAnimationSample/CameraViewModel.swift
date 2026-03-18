@@ -10,6 +10,7 @@ import VideoProcessingTwo
 import Vision
 import AVFoundation
 import CoreImage
+import CoreImage.CIFilterBuiltins
 import MediaPlayer
 import Photos
 
@@ -40,6 +41,8 @@ public class CameraViewModel: NSObject, ObservableObject {
     private var previousMetricsPosition: (x: Double, y: Double)?
     private var previousMetricsTimestamp: TimeInterval?
     private static let temporalAudioMaxFrameOffset: Double = 48.0
+    private static let temporalAtlasAudioMaxFrameOffset: Double = 48.0
+    private static let heatmapAtlasAudioMaxFrameOffset: Double = 48.0
     private let recordingStateQueue = DispatchQueue(label: "com.handpose.recording.state")
     private let recordingColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
     private var movieWriter: MovieWriter?
@@ -52,6 +55,8 @@ public class CameraViewModel: NSObject, ObservableObject {
         case handPosition
         case audio
         case temporalAudio
+        case temporalAtlasAudio
+        case heatmapAtlasAudio
         case handDistance
         case handHeight
         case handVelocity
@@ -69,6 +74,10 @@ public class CameraViewModel: NSObject, ObservableObject {
                 return "Audio"
             case .temporalAudio:
                 return "Temporal Audio"
+            case .temporalAtlasAudio:
+                return "Temporal Atlas Audio"
+            case .heatmapAtlasAudio:
+                return "Heatmap Atlas Audio"
             case .handDistance:
                 return "Hand Distance"
             case .handHeight:
@@ -85,7 +94,7 @@ public class CameraViewModel: NSObject, ObservableObject {
         }
 
         public var usesAudioInput: Bool {
-            self == .audio || self == .temporalAudio
+            self == .audio || self == .temporalAudio || self == .temporalAtlasAudio || self == .heatmapAtlasAudio
         }
     }
 
@@ -96,18 +105,39 @@ public class CameraViewModel: NSObject, ObservableObject {
     public var currentModeMetrics: [(label: String, value: String)] {
         if analysisMode.usesAudioInput {
             let amplitude = Double(audioPlayer.currentAmplitude)
-            if analysisMode == .audio {
+            switch analysisMode {
+            case .audio:
                 return [("Amplitude", String(format: "%.2f", amplitude))]
+            case .temporalAudio:
+                let maxOffset = Int((amplitude * Self.temporalAudioMaxFrameOffset).rounded())
+                return [
+                    ("Amplitude", String(format: "%.2f", amplitude)),
+                    ("Max Frame Offset", "\(maxOffset)"),
+                    ("Filter", "Perlin Flow Atlas"),
+                    ("Noise Scale", "2.0"),
+                    ("Flow Speed", "0.0"),
+                    ("Input Frame", "1024")
+                ]
+            case .temporalAtlasAudio:
+                let maxOffset = Int((amplitude * Self.temporalAtlasAudioMaxFrameOffset).rounded())
+                return [
+                    ("Amplitude", String(format: "%.2f", amplitude)),
+                    ("Max Frame Offset", "\(maxOffset)"),
+                    ("Filter", "Temporal Atlas"),
+                    ("Input Frame", "1024")
+                ]
+            case .heatmapAtlasAudio:
+                let maxOffset = Int((amplitude * Self.heatmapAtlasAudioMaxFrameOffset).rounded())
+                return [
+                    ("Amplitude", String(format: "%.2f", amplitude)),
+                    ("Max Frame Offset", "\(maxOffset)"),
+                    ("Filter", "Heatmap Atlas"),
+                    ("Heatmap", "Radial Gradient"),
+                    ("Input Frame", "1024")
+                ]
+            default:
+                break
             }
-
-            let maxOffset = Int((amplitude * Self.temporalAudioMaxFrameOffset).rounded())
-            return [
-                ("Amplitude", String(format: "%.2f", amplitude)),
-                ("Max Frame Offset", "\(maxOffset)"),
-                ("Noise Scale", "2.0"),
-                ("Flow Speed", "0.0"),
-                ("Input Frame", "1024")
-            ]
         }
 
         guard let position = handPosition else {
@@ -123,18 +153,6 @@ public class CameraViewModel: NSObject, ObservableObject {
                 ("Y Position", String(format: "%.2f", position.y)),
                 ("Blur Radius", String(format: "%.1f px", position.x * 20.0)),
                 ("Brightness", String(format: "%.2f", position.y - 0.5))
-            ]
-        case .audio:
-            return [("Amplitude", String(format: "%.2f", audioPlayer.currentAmplitude))]
-        case .temporalAudio:
-            let amplitude = Double(audioPlayer.currentAmplitude)
-            let maxOffset = Int((amplitude * Self.temporalAudioMaxFrameOffset).rounded())
-            return [
-                ("Amplitude", String(format: "%.2f", amplitude)),
-                ("Max Frame Offset", "\(maxOffset)"),
-                ("Noise Scale", "2.0"),
-                ("Flow Speed", "0.0"),
-                ("Input Frame", "1024")
             ]
         case .handDistance:
             return [
@@ -174,6 +192,8 @@ public class CameraViewModel: NSObject, ObservableObject {
                 ("Blur Radius", String(format: "%.1f px", handSpread * 20.0)),
                 ("Brightness", String(format: "%.2f", (handSpread * 0.45) - 0.2))
             ]
+        case .audio, .temporalAudio, .temporalAtlasAudio, .heatmapAtlasAudio:
+            return [("Amplitude", String(format: "%.2f", Double(audioPlayer.currentAmplitude)))]
         }
     }
 
@@ -383,6 +403,8 @@ public class CameraViewModel: NSObject, ObservableObject {
             ])
         ]
 
+        let radialHeatmap = Self.radialHeatmapImage(size: CGSize(width: 1024, height: 1024))
+
         let temporalAudioFilters: [Filter] = [
             PerlinFlowFieldAtlasFilter(
                 maxFrameOffset: Int(Self.temporalAudioMaxFrameOffset.rounded()),
@@ -395,6 +417,43 @@ public class CameraViewModel: NSObject, ObservableObject {
                         animationProperty: .intensity,
                         startValue: 0.0,
                         endValue: Self.temporalAudioMaxFrameOffset,
+                        startTime: 0.0,
+                        endTime: 1.0,
+                        tweenFunctionProvider: audioBlurTween
+                    )
+                ]
+            )
+        ]
+
+        let heatmapAtlasAudioFilters: [Filter] = [
+            HeatmapFrameOffsetAtlasFilter(
+                maxFrameOffset: Int(Self.heatmapAtlasAudioMaxFrameOffset.rounded()),
+                heatmapImage: radialHeatmap,
+                inputFrameSize: CGSize(width: 1024, height: 1024),
+                filterAnimators: [
+                    FilterAnimator(
+                        type: .SingleValue,
+                        animationProperty: .intensity,
+                        startValue: 0.0,
+                        endValue: Self.heatmapAtlasAudioMaxFrameOffset,
+                        startTime: 0.0,
+                        endTime: 1.0,
+                        tweenFunctionProvider: audioBlurTween
+                    )
+                ]
+            )
+        ]
+
+        let temporalAtlasAudioFilters: [Filter] = [
+            TemporalTextureAtlas(
+                frameOffset: Int(Self.temporalAtlasAudioMaxFrameOffset.rounded()),
+                inputFrameSize: CGSize(width: 1024, height: 1024),
+                filterAnimators: [
+                    FilterAnimator(
+                        type: .SingleValue,
+                        animationProperty: .intensity,
+                        startValue: 0.0,
+                        endValue: Self.temporalAtlasAudioMaxFrameOffset,
                         startTime: 0.0,
                         endTime: 1.0,
                         tweenFunctionProvider: audioBlurTween
@@ -596,6 +655,8 @@ public class CameraViewModel: NSObject, ObservableObject {
             .handPosition: handPositionFilters,
             .audio: audioFilters,
             .temporalAudio: temporalAudioFilters,
+            .temporalAtlasAudio: temporalAtlasAudioFilters,
+            .heatmapAtlasAudio: heatmapAtlasAudioFilters,
             .handDistance: handDistanceFilters,
             .handHeight: handHeightFilters,
             .handVelocity: handVelocityFilters,
@@ -648,6 +709,19 @@ public class CameraViewModel: NSObject, ObservableObject {
         let dx = position.x - 0.5
         let dy = position.y - 0.5
         return clamp(sqrt(dx * dx + dy * dy) / 0.707)
+    }
+
+    private static func radialHeatmapImage(size: CGSize) -> CIImage {
+        let extent = CGRect(origin: .zero, size: size)
+        let gradient = CIFilter.radialGradient()
+        gradient.center = CGPoint(x: size.width * 0.5, y: size.height * 0.5)
+        gradient.radius0 = min(size.width, size.height) * 0.08
+        gradient.radius1 = min(size.width, size.height) * 0.52
+        gradient.color0 = CIColor(red: 1.0, green: 0.1, blue: 0.1, alpha: 1.0)
+        gradient.color1 = CIColor.black
+
+        let fallback = CIImage(color: CIColor.black).cropped(to: extent)
+        return (gradient.outputImage ?? fallback).cropped(to: extent)
     }
 
     private func recognizedPoint(
@@ -852,6 +926,132 @@ public class CameraViewModel: NSObject, ObservableObject {
         }
     }
 
+    private func recordFrameIfNeeded(_ image: CIImage, at frameTime: CMTime) {
+        var writer: MovieWriter?
+        var startTime: CMTime?
+        var renderSize: CGSize = .zero
+
+        recordingStateQueue.sync {
+            guard isRecordingVideo, let movieWriter else {
+                return
+            }
+
+            writer = movieWriter
+            renderSize = recordingRenderSize
+
+            if recordingStartTime == nil {
+                recordingStartTime = frameTime
+            }
+
+            startTime = recordingStartTime
+            recordedFrameCount += 1
+        }
+
+        guard
+            let writer,
+            let startTime
+        else {
+            return
+        }
+
+        let presentationTime = CMTimeSubtract(frameTime, startTime)
+        let outputImage = preparedRecordingImage(image, targetSize: renderSize)
+
+        guard let pixelBuffer = writer.getPixelBuffer() else {
+            return
+        }
+
+        MetalEnvironment.shared.context.render(
+            outputImage,
+            to: pixelBuffer,
+            bounds: CGRect(origin: .zero, size: renderSize),
+            colorSpace: recordingColorSpace
+        )
+        writer.appendFrame(pixelBuffer: pixelBuffer, time: presentationTime)
+    }
+
+    private func preparedRecordingImage(_ image: CIImage, targetSize: CGSize) -> CIImage {
+        guard image.extent.origin != .zero else {
+            return image
+        }
+
+        let translated = image.transformed(
+            by: CGAffineTransform(translationX: -image.extent.origin.x, y: -image.extent.origin.y)
+        )
+
+        if translated.extent.size == targetSize {
+            return translated
+        }
+
+        return translated.cropped(to: CGRect(origin: .zero, size: targetSize))
+    }
+
+    private func recordingTargetSize(for size: CGSize) -> CGSize {
+        let fallback = CGSize(width: 1920, height: 1080)
+        let sourceSize = size.width > 0 && size.height > 0 ? size : fallback
+
+        let width = max(2, Int(sourceSize.width.rounded()))
+        let height = max(2, Int(sourceSize.height.rounded()))
+
+        let evenWidth = width.isMultiple(of: 2) ? width : width - 1
+        let evenHeight = height.isMultiple(of: 2) ? height : height - 1
+
+        return CGSize(width: evenWidth, height: evenHeight)
+    }
+
+    private func saveRecordingToPhotoLibrary(fileURL: URL) {
+        requestPhotoLibraryAddAccess { [weak self] granted in
+            guard let self else { return }
+
+            guard granted else {
+                DispatchQueue.main.async {
+                    self.isSavingRecording = false
+                    self.recordingStatusMessage = "Photos access is required to save video."
+                }
+                self.cleanupRecordingFile(at: fileURL)
+                return
+            }
+
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: fileURL)
+            }) { success, error in
+                DispatchQueue.main.async {
+                    self.isSavingRecording = false
+                    if success {
+                        self.recordingStatusMessage = "Saved to Photos."
+                    } else {
+                        self.recordingStatusMessage = error?.localizedDescription ?? "Failed to save video."
+                    }
+                }
+                self.cleanupRecordingFile(at: fileURL)
+            }
+        }
+    }
+
+    private func requestPhotoLibraryAddAccess(completion: @escaping (Bool) -> Void) {
+        if #available(iOS 14.0, *) {
+            PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+                DispatchQueue.main.async {
+                    completion(status == .authorized || status == .limited)
+                }
+            }
+        } else {
+            PHPhotoLibrary.requestAuthorization { status in
+                DispatchQueue.main.async {
+                    completion(status == .authorized)
+                }
+            }
+        }
+    }
+
+    private func cleanupRecordingFile(at url: URL) {
+        recordingStateQueue.async {
+            if FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+    }
+
     // MARK: - Animation State
 
     private func updateAnimationState(from observations: [VNHumanHandPoseObservation]) {
@@ -910,6 +1110,7 @@ extension CameraViewModel: CameraSourceDelegate {
         let cmTime = frame.time
         if let renderedImage = scene.group.renderGroup(frameTime: cmTime.seconds, compositionTimeOffset: 0, inputImage: nil) {
             let finalImage = drawHandBoundingBoxes(on: renderedImage, observations: detectedHands)
+            recordFrameIfNeeded(finalImage, at: cmTime)
             
             DispatchQueue.main.async {
                 self.displayCIImage = finalImage

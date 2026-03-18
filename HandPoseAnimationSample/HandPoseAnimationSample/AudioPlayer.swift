@@ -15,43 +15,36 @@ public class AudioPlayer: NSObject, ObservableObject {
     @Published public var duration: TimeInterval = 0.0
 
     private var audioPlayer: AVAudioPlayer?
-    private var amplitudeHistory: [Float] = []
-    private let movingAverageWindowSize = 20
+    private var smoothedAmplitude: Float = 0.0
 
     public var currentAmplitude: Float {
         guard let audioPlayer = audioPlayer, audioPlayer.isPlaying else {
-            amplitudeHistory.removeAll()
+            smoothedAmplitude = 0.0
             return 0.0
         }
 
         audioPlayer.updateMeters()
         let averagePower = audioPlayer.averagePower(forChannel: 0)
+        let peakPower = audioPlayer.peakPower(forChannel: 0)
 
-        // Convert dB to linear scale (0.0 - 1.0)
-        // dB range is typically -160 to 0
-        let instantAmplitude = max(0, 1.0 - (abs(averagePower) / 160.0))
+        // Convert the metering values from decibels into a linear 0...1 range.
+        let averageLinear = pow(10.0, averagePower / 20.0)
+        let peakLinear = pow(10.0, peakPower / 20.0)
 
-        // Track moving average
-        amplitudeHistory.append(instantAmplitude)
-        if amplitudeHistory.count > movingAverageWindowSize {
-            amplitudeHistory.removeFirst()
-        }
+        // Blend average and peak so we keep punch without becoming jittery.
+        let blendedAmplitude = min(1.0, (averageLinear * 0.7) + (peakLinear * 0.3))
 
-        let movingAverage = amplitudeHistory.isEmpty ? 0.0 : amplitudeHistory.reduce(0, +) / Float(amplitudeHistory.count)
+        // Drop the very low noise floor, then expand the mid-range a bit so
+        // typical music produces more nuanced values than just 0.5 or 1.0.
+        let noiseFloor: Float = 0.015
+        let normalizedAmplitude = max(0.0, (blendedAmplitude - noiseFloor) / (1.0 - noiseFloor))
+        let shapedAmplitude = pow(normalizedAmplitude, 0.6)
 
-        // Calculate moving standard deviation
-        let variance = amplitudeHistory.isEmpty ? 0.0 : amplitudeHistory.reduce(0) { sum, value in
-            sum + pow(value - movingAverage, 2)
-        } / Float(amplitudeHistory.count)
-        let movingStdDev = sqrt(variance)
+        // Light smoothing keeps the meter responsive without flickering wildly.
+        let smoothingFactor: Float = 0.2
+        smoothedAmplitude = (smoothedAmplitude * (1.0 - smoothingFactor)) + (shapedAmplitude * smoothingFactor)
 
-        // Normalize amplitude relative to moving average and scale by standard deviation
-        // This makes local quiets quiet and local louds loud within the context of recent audio
-        let normalizedDifference = instantAmplitude - movingAverage
-        let scaledAmplitude = movingStdDev > 0.01 ? normalizedDifference / (movingStdDev * 2.0) : 0.0
-
-        // Center around 0.5 and clamp to 0.0-1.0
-        return max(0, min(1.0, scaledAmplitude + 0.5))
+        return max(0.0, min(1.0, smoothedAmplitude))
     }
 
     override public init() {
