@@ -203,7 +203,7 @@
 			mainGroup = 8C1135792EA987A7009F40D1;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				8C1135C02EA98833009F40D1 /* XCLocalSwiftPackageReference "../../../../../Repos/VideoProcessingTwo" */,
+				8CE778122F6B06440059FFA0 /* XCLocalSwiftPackageReference "../../VideoProcessingTwo" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 8C1135832EA987A7009F40D1 /* Products */;
@@ -411,6 +411,7 @@
 				DEVELOPMENT_TEAM = 2KPALSNS6E;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "VideoFilter saves exported videos to your photo library.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -445,6 +446,7 @@
 				DEVELOPMENT_TEAM = 2KPALSNS6E;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "VideoFilter saves exported videos to your photo library.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -593,9 +595,9 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		8C1135C02EA98833009F40D1 /* XCLocalSwiftPackageReference "../../../../../Repos/VideoProcessingTwo" */ = {
+		8CE778122F6B06440059FFA0 /* XCLocalSwiftPackageReference "../../VideoProcessingTwo" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = ../../../../../Repos/VideoProcessingTwo;
+			relativePath = ../../VideoProcessingTwo;
 		};
 /* End XCLocalSwiftPackageReference section */
 

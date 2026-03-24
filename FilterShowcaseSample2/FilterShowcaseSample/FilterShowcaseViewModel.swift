@@ -413,6 +413,17 @@ final class FilterShowcaseViewModel: NSObject, ObservableObject {
                 filter.frameSpacing = frameSpacing
                 filter.inputFrameSize = CGSize(width: CGFloat(side), height: CGFloat(side))
             }
+        case "temporal_color_split_atlas":
+            if let filter = firstFilter as? TemporalColorSplitAtlasFilter {
+                let frameCount = max(1, Int((values["frameCount"] ?? Double(filter.frameCount)).rounded()))
+                let frameSpacing = max(1, Int((values["frameSpacing"] ?? Double(filter.frameSpacing)).rounded()))
+                let componentCount = max(1, Int((values["componentCount"] ?? Double(filter.componentCount)).rounded()))
+                let side = max(1, Int((values["frameSize"] ?? Double(Int(filter.inputFrameSize.width))).rounded()))
+                filter.frameCount = frameCount
+                filter.frameSpacing = frameSpacing
+                filter.componentCount = componentCount
+                filter.inputFrameSize = CGSize(width: CGFloat(side), height: CGFloat(side))
+            }
         case "perlin_flow_field_atlas":
             if let filter = firstFilter as? PerlinFlowFieldAtlasFilter {
                 let maxOffset = max(0, Int((values["maxOffset"] ?? Double(filter.maxFrameOffset)).rounded()))
@@ -1203,6 +1214,31 @@ private extension FilterShowcaseViewModel {
                     return [TemporalFadeAtlasFilter(
                         frameCount: frameCount,
                         frameSpacing: frameSpacing,
+                        inputFrameSize: CGSize(width: CGFloat(side), height: CGFloat(side)),
+                        filterAnimators: []
+                    )]
+                }
+            ),
+            ShowcaseEntry(
+                id: "temporal_color_split_atlas",
+                name: "Temporal Color Split Atlas",
+                subtitle: "Palette-tinted temporal samples blended across time",
+                category: "Temporal",
+                parameters: [
+                    p("frameCount", "Frame Count", 1.0...15.0, 8.0, step: 1.0),
+                    p("frameSpacing", "Frame Spacing", 1.0...12.0, 2.0, step: 1.0),
+                    p("componentCount", "Color Components", 3.0...9.0, 6.0, step: 1.0),
+                    p("frameSize", "Input Frame Size", 128.0...2048.0, 1024.0, step: 64.0)
+                ],
+                makeFilters: { values, _ in
+                    let frameCount = max(1, Int((values["frameCount"] ?? 8.0).rounded()))
+                    let frameSpacing = max(1, Int((values["frameSpacing"] ?? 2.0).rounded()))
+                    let componentCount = max(1, Int((values["componentCount"] ?? 6.0).rounded()))
+                    let side = max(1, Int((values["frameSize"] ?? 1024.0).rounded()))
+                    return [TemporalColorSplitAtlasFilter(
+                        frameCount: frameCount,
+                        frameSpacing: frameSpacing,
+                        componentCount: componentCount,
                         inputFrameSize: CGSize(width: CGFloat(side), height: CGFloat(side)),
                         filterAnimators: []
                     )]

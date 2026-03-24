@@ -1,26 +1,75 @@
-import AVKit
 import SwiftUI
 import UIKit
+import PhotosUI
+import CoreTransferable
+import UniformTypeIdentifiers
+import VideoProcessingTwo
+
+private struct VideoPreviewView: View {
+    @ObservedObject var previewState: VideoFilterPreviewState
+
+    var body: some View {
+        Group {
+            if let image = previewState.displayCIImage {
+                MetalView(ciImage: image, isFrontCamera: false, rotateForDeviceOrientation: false)
+                    .background(Color.black)
+            } else {
+                Color.black
+                    .overlay {
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .tint(.white)
+                            Text("Preparing video preview...")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.85))
+                        }
+                    }
+            }
+        }
+    }
+}
 
 struct ContentView: View {
     @StateObject private var viewModel = VideoFilterViewModel()
+    @State private var showingLoadSourceDialog = false
     @State private var showingImporter = false
+    @State private var showingPhotoPicker = false
+    @State private var selectedPhotoPickerItem: PhotosPickerItem?
     @State private var showingShareSheet = false
-    @State private var showingExportPreview = false
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 header
                 Divider()
-                playerSection
+                previewSection
                 Divider()
                 controls
             }
             .navigationTitle("VideoFilter")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
-                viewModel.loadComposition()
+                viewModel.startPreview()
+            }
+            .onDisappear {
+                viewModel.stopPreview()
+            }
+            .confirmationDialog(
+                "Load Video",
+                isPresented: $showingLoadSourceDialog,
+                titleVisibility: .visible
+            ) {
+                Button("Files") {
+                    showingImporter = true
+                }
+
+                Button("Camera Roll") {
+                    showingPhotoPicker = true
+                }
+
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Choose where to load your video from.")
             }
             .fileImporter(
                 isPresented: $showingImporter,
@@ -36,14 +85,28 @@ struct ContentView: View {
                     viewModel.errorMessage = error.localizedDescription
                 }
             }
+            .photosPicker(
+                isPresented: $showingPhotoPicker,
+                selection: $selectedPhotoPickerItem,
+                matching: .videos,
+                preferredItemEncoding: .current
+            )
+            .task(id: selectedPhotoPickerItem) {
+                guard let selectedPhotoPickerItem else { return }
+
+                do {
+                    if let pickedVideo = try await selectedPhotoPickerItem.loadTransferable(type: PickedVideo.self) {
+                        viewModel.loadVideo(url: pickedVideo.url)
+                    }
+                } catch {
+                    viewModel.errorMessage = error.localizedDescription
+                }
+
+                self.selectedPhotoPickerItem = nil
+            }
             .sheet(isPresented: $showingShareSheet) {
                 if let exportedVideoURL = viewModel.exportedVideoURL {
                     ShareSheet(items: [exportedVideoURL])
-                }
-            }
-            .sheet(isPresented: $showingExportPreview) {
-                if let exportedVideoURL = viewModel.exportedVideoURL {
-                    ExportPreviewView(url: exportedVideoURL)
                 }
             }
         }
@@ -51,14 +114,14 @@ struct ContentView: View {
 
     private var header: some View {
         VStack(spacing: 10) {
-            Text("Load a video, audition filters, tweak the parameters, and export the result.")
+            Text("MovieReader-driven Metal preview with the full filter showcase catalog.")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
 
             HStack(spacing: 12) {
                 Button {
-                    showingImporter = true
+                    showingLoadSourceDialog = true
                 } label: {
                     Label("Load Video", systemImage: "video.badge.plus")
                         .frame(maxWidth: .infinity)
@@ -79,7 +142,7 @@ struct ContentView: View {
                 Text(viewModel.selectedVideoName)
                     .font(.caption.weight(.semibold))
                 if let entry = viewModel.currentEntry {
-                    Text("Current Filter: \(entry.name)")
+                    Text("Current Filter: \(entry.name) · \(entry.category)")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -88,32 +151,11 @@ struct ContentView: View {
         .padding()
     }
 
-    private var playerSection: some View {
-        Group {
-            if let player = viewModel.player {
-                VideoPlayer(player: player)
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                    .background(Color.black)
-            } else {
-                Rectangle()
-                    .fill(Color.black)
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                    .overlay {
-                        Button {
-                            viewModel.loadComposition()
-                        } label: {
-                            Label("Load Preview", systemImage: "play.circle.fill")
-                                .font(.title3)
-                                .foregroundColor(.white)
-                                .padding(12)
-                                .background(Color.blue)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                        }
-                    }
-            }
-        }
+    private var previewSection: some View {
+        VideoPreviewView(previewState: viewModel.previewState)
+            .frame(maxWidth: .infinity)
+            .aspectRatio(16.0 / 9.0, contentMode: .fit)
+            .background(Color.black)
     }
 
     private var controls: some View {
@@ -121,21 +163,40 @@ struct ContentView: View {
             VStack(spacing: 16) {
                 GroupBox("Filter") {
                     VStack(alignment: .leading, spacing: 10) {
-                        Picker("Filter", selection: Binding(
-                            get: { viewModel.selectedFilterID },
-                            set: { viewModel.selectFilter($0) }
-                        )) {
-                            ForEach(viewModel.filterEntries) { entry in
-                                Text(entry.name).tag(entry.id)
-                            }
-                        }
-                        .pickerStyle(.menu)
+                        TextField("Search filters", text: $viewModel.filterSearchText)
+                            .textFieldStyle(.roundedBorder)
 
-                        if let entry = viewModel.currentEntry {
-                            Text(entry.subtitle)
+                        if viewModel.visibleFilterEntries.isEmpty {
+                            Text("No filters match your search.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            Picker(
+                                "Filter",
+                                selection: Binding(
+                                    get: { viewModel.selectedFilterID },
+                                    set: { viewModel.selectFilter($0) }
+                                )
+                            ) {
+                                ForEach(viewModel.visibleFilterEntries) { entry in
+                                    Text("\(entry.name) · \(entry.category)").tag(entry.id)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                        }
+
+                        if let entry = viewModel.currentEntry {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(entry.name)
+                                    .font(.headline)
+                                Text(entry.subtitle)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text("Category: \(entry.category)")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
                 }
@@ -192,32 +253,29 @@ struct ContentView: View {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
 
-                            HStack(spacing: 12) {
-                                Button {
-                                    showingExportPreview = true
-                                } label: {
-                                    Label("Preview", systemImage: "play.rectangle")
-                                        .frame(maxWidth: .infinity)
-                                }
-                                .buttonStyle(.bordered)
-
-                                Button {
-                                    showingShareSheet = true
-                                } label: {
-                                    Label("Share", systemImage: "square.and.arrow.up")
-                                        .frame(maxWidth: .infinity)
-                                }
-                                .buttonStyle(.borderedProminent)
+                            Button {
+                                showingShareSheet = true
+                            } label: {
+                                Label("Share Export", systemImage: "square.and.arrow.up")
+                                    .frame(maxWidth: .infinity)
                             }
+                            .buttonStyle(.borderedProminent)
 
                             Button("Clear Export") {
                                 viewModel.resetExportState()
                             }
                             .buttonStyle(.plain)
                         } else if !viewModel.isExporting {
-                            Text("Export writes the current filtered scene to a video file you can preview or share.")
+                            Text("Export preserves the selected filter and current parameter values.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                        }
+
+                        if let exportStatusMessage = viewModel.exportStatusMessage {
+                            Text(exportStatusMessage)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -239,37 +297,6 @@ struct ContentView: View {
     }
 }
 
-private struct ExportPreviewView: View {
-    let url: URL
-    @Environment(\.dismiss) private var dismiss
-    @State private var player: AVPlayer
-
-    init(url: URL) {
-        self.url = url
-        _player = State(initialValue: AVPlayer(url: url))
-    }
-
-    var body: some View {
-        NavigationStack {
-            VideoPlayer(player: player)
-                .background(Color.black)
-                .ignoresSafeArea(edges: .bottom)
-                .navigationTitle("Export Preview")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Done") {
-                            dismiss()
-                        }
-                    }
-                }
-                .onAppear {
-                    player.play()
-                }
-        }
-    }
-}
-
 private struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
 
@@ -278,6 +305,30 @@ private struct ShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+private struct PickedVideo: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(importedContentType: .movie) { received in
+            let originalURL = received.file
+            let tempDirectory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("VideoFilterImports", isDirectory: true)
+            try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+
+            let destinationURL = tempDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(originalURL.pathExtension.isEmpty ? "mov" : originalURL.pathExtension)
+
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                try FileManager.default.removeItem(at: destinationURL)
+            }
+
+            try FileManager.default.copyItem(at: originalURL, to: destinationURL)
+            return Self(url: destinationURL)
+        }
+    }
 }
 
 #Preview {

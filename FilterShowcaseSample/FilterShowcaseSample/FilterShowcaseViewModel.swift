@@ -705,6 +705,31 @@ private extension FilterShowcaseViewModel {
                 }
             ),
             ShowcaseEntry(
+                id: "temporal_color_split_atlas",
+                name: "Temporal Color Split Atlas",
+                subtitle: "Palette-tinted temporal samples blended across time",
+                category: "Migrated",
+                parameters: [
+                    p("frameCount", "Frame Count", 1.0...15.0, 8.0, step: 1.0),
+                    p("frameSpacing", "Frame Spacing", 1.0...12.0, 2.0, step: 1.0),
+                    p("componentCount", "Color Components", 3.0...9.0, 6.0, step: 1.0),
+                    p("frameSize", "Input Frame Size", 128.0...2048.0, 1024.0, step: 64.0)
+                ],
+                makeFilters: { values, _ in
+                    let frameCount = max(1, Int((values["frameCount"] ?? 8.0).rounded()))
+                    let frameSpacing = max(1, Int((values["frameSpacing"] ?? 2.0).rounded()))
+                    let componentCount = max(1, Int((values["componentCount"] ?? 6.0).rounded()))
+                    let side = max(1, Int((values["frameSize"] ?? 1024.0).rounded()))
+                    return [TemporalColorSplitAtlasFilter(
+                        frameCount: frameCount,
+                        frameSpacing: frameSpacing,
+                        componentCount: componentCount,
+                        inputFrameSize: CGSize(width: CGFloat(side), height: CGFloat(side)),
+                        filterAnimators: []
+                    )]
+                }
+            ),
+            ShowcaseEntry(
                 id: "comic",
                 name: "Comic Stylize",
                 subtitle: "CIComicEffect blend",
