@@ -3,7 +3,12 @@ import Combine
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import Foundation
+import SwiftUI
 import VideoProcessingTwo
+
+final class FilterShowcasePreviewState: ObservableObject {
+    @Published var displayCIImage: CIImage?
+}
 
 struct ShowcaseParameter: Identifiable {
     let id: String
@@ -33,50 +38,47 @@ struct ShowcaseEntry: Identifiable {
     let subtitle: String
     let category: String
     let parameters: [ShowcaseParameter]
-    let makeFilters: (_ values: [String: Double], _ size: CGSize) -> [Filter]
+    let makeFilters: (_ values: [String: Double], _ renderSize: CGSize) -> [Filter]
 }
 
-@MainActor
-final class FilterShowcaseViewModel: ObservableObject {
-    enum Mode: String, CaseIterable, Identifiable {
-        case filters = "Filters"
-        case styles = "Style Presets"
-
-        var id: String { rawValue }
-    }
-
-    @Published var player: AVPlayer?
+final class FilterShowcaseViewModel: NSObject, ObservableObject {
     @Published var errorMessage: String?
-
-    @Published var mode: Mode = .filters {
-        didSet { handleSelectionChange(resetParameters: true) }
-    }
+    @Published private(set) var isFrontCamera: Bool = false
     @Published var filterSearchText: String = ""
-    @Published var styleSearchText: String = ""
     @Published var selectedFilterID: String = ""
-    @Published var selectedStyleID: String = ""
     @Published var parameterValues: [String: Double] = [:]
 
     let filterEntries: [ShowcaseEntry]
-    let styleEntries: [ShowcaseEntry]
+    let previewState = FilterShowcasePreviewState()
 
-    private var pendingRebuild: DispatchWorkItem?
-    private var videoURL: URL?
-    private var videoSource: VideoSource?
+    private let cameraManager = CameraManager()
+    private let cameraSource: CameraSource
+    private var scene: VideoScene?
+    private let sceneQueue = DispatchQueue(label: "com.interrobang.FilterShowcaseSample2.sceneQueue")
 
-    init() {
+    private var currentRenderSize = CGSize(width: 1920, height: 1080)
+    private var hasAppliedFirstFrameSize = false
+    private var activeSelectionID: String?
+
+    override init() {
+        cameraSource = CameraSource(cameraManager: cameraManager)
         filterEntries = Self.makeFilterEntries()
-        styleEntries = Self.makeStyleEntries()
+
+        super.init()
+
+        cameraSource.delegate = self
+        setupScene()
+        setupCamera()
 
         if let firstFilter = filterEntries.first {
             selectedFilterID = firstFilter.id
             parameterValues = Self.defaults(for: firstFilter.parameters)
         }
-        if let firstStyle = styleEntries.first {
-            selectedStyleID = firstStyle.id
-        }
+        applyCurrentSelection()
+    }
 
-        loadBundledVideo()
+    deinit {
+        stopCamera()
     }
 
     var visibleFilterEntries: [ShowcaseEntry] {
@@ -90,128 +92,295 @@ final class FilterShowcaseViewModel: ObservableObject {
         }
     }
 
-    var visibleStyleEntries: [ShowcaseEntry] {
-        let query = styleSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return styleEntries }
-
-        return styleEntries.filter { entry in
-            entry.name.lowercased().contains(query) || entry.subtitle.lowercased().contains(query)
-        }
-    }
-
     var currentEntry: ShowcaseEntry? {
-        switch mode {
-        case .filters:
-            return filterEntries.first { $0.id == selectedFilterID }
-        case .styles:
-            return styleEntries.first { $0.id == selectedStyleID }
-        }
+        filterEntries.first { $0.id == selectedFilterID }
     }
 
     var currentParameters: [ShowcaseParameter] {
-        currentEntry?.parameters ?? []
-    }
-
-    func loadComposition() {
-        rebuildPlayer(seekToCurrentTime: false)
+        return currentEntry?.parameters ?? []
     }
 
     func selectFilter(_ id: String) {
         guard selectedFilterID != id else { return }
         selectedFilterID = id
-        handleSelectionChange(resetParameters: true)
-    }
-
-    func selectStyle(_ id: String) {
-        guard selectedStyleID != id else { return }
-        selectedStyleID = id
-        handleSelectionChange(resetParameters: true)
-    }
-
-    func setValue(_ value: Double, for parameter: ShowcaseParameter) {
-        let clamped = min(max(value, parameter.range.lowerBound), parameter.range.upperBound)
-        let stepped = (clamped / parameter.step).rounded() * parameter.step
-        parameterValues[parameter.id] = stepped
-        scheduleRebuild()
+        if let entry = filterEntries.first(where: { $0.id == id }) {
+            parameterValues = Self.defaults(for: entry.parameters)
+        }
+        applyCurrentSelection()
     }
 
     func value(for parameter: ShowcaseParameter) -> Double {
         parameterValues[parameter.id] ?? parameter.defaultValue
     }
 
-    private func handleSelectionChange(resetParameters: Bool) {
-        guard let entry = currentEntry else { return }
-        if resetParameters {
-            parameterValues = Self.defaults(for: entry.parameters)
-        }
-        scheduleRebuild()
+    func setValue(_ value: Double, for parameter: ShowcaseParameter) {
+        let clamped = min(max(value, parameter.range.lowerBound), parameter.range.upperBound)
+        let stepped = (clamped / parameter.step).rounded() * parameter.step
+        parameterValues[parameter.id] = stepped
+        applyCurrentSelection(rebuildFilters: false)
     }
 
-    private func scheduleRebuild() {
-        pendingRebuild?.cancel()
-
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.rebuildPlayer(seekToCurrentTime: true)
-        }
-        pendingRebuild = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: workItem)
+    func stopCamera() {
+        cameraManager.stop()
     }
 
-    private func loadBundledVideo() {
-        if let url = Bundle.main.url(forResource: "download", withExtension: "mov") ??
-            Bundle.main.url(forResource: "mountain", withExtension: "mp4") {
-            videoURL = url
-            videoSource = VideoSource(url: url)
-        }
+    #if os(iOS)
+    func swapCamera() {
+        let nextPosition: AVCaptureDevice.Position = isFrontCamera ? .back : .front
+        cameraManager.swapCamera(position: nextPosition)
+        isFrontCamera = cameraManager.devicePosition == .front
     }
+    #endif
 
-    private func rebuildPlayer(seekToCurrentTime: Bool) {
-        guard let videoURL, let videoSource else {
-            errorMessage = "Could not load bundled sample video."
-            return
-        }
-        guard let entry = currentEntry else {
-            errorMessage = "No filter/style selected."
-            return
-        }
-
-        let scene = VideoScene(duration: videoSource.duration, frameRate: 30.0, size: videoSource.naturalSize)
-        _ = scene.addAsset(
-            atLayerIndex: LayerObjectIndex(groupIndices: [], layerIndex: 0),
-            type: .video,
-            frame: CGRect(origin: .zero, size: videoSource.naturalSize),
-            rotation: 0.0,
-            assetURL: videoURL,
-            text: ""
+    private func setupScene() {
+        let cameraSurface = Surface(
+            source: cameraSource,
+            frame: CGRect(x: 0, y: 0, width: currentRenderSize.width, height: currentRenderSize.height),
+            rotation: 0
         )
-        scene.group.filters = entry.makeFilters(parameterValues, videoSource.naturalSize)
+        let layer = Layer(surfaces: [cameraSurface])
+        let group = LayerGroup(groups: [], layers: [layer], filters: [], mask: nil)
 
-        guard let compositionResult = SceneVideoComposition.createComposition(scene: scene) else {
-            errorMessage = "Failed to build composition for \(entry.name)."
+        let liveScene = VideoScene(duration: .infinity, frameRate: 30.0, size: currentRenderSize)
+        liveScene.group = group
+        scene = liveScene
+    }
+
+    private func setupCamera() {
+        cameraManager.setup()
+
+        AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if granted {
+                    self.cameraSource.startCamera()
+                    self.errorMessage = nil
+                } else {
+                    self.errorMessage = "Camera permission denied. Enable camera access in Settings."
+                }
+            }
+        }
+    }
+
+    private func ensureValidSelection() {
+        if filterEntries.first(where: { $0.id == selectedFilterID }) == nil, let first = filterEntries.first {
+            selectedFilterID = first.id
+            parameterValues = Self.defaults(for: first.parameters)
+        }
+    }
+
+    private func applyCurrentSelection(rebuildFilters: Bool = true) {
+        let size = currentRenderSize
+        ensureValidSelection()
+        guard let entry = filterEntries.first(where: { $0.id == selectedFilterID }) else { return }
+        let selectionID = entry.id
+        let values = parameterValues
+
+        if rebuildFilters || activeSelectionID != selectionID {
+            let filters = entry.makeFilters(values, size)
+            activeSelectionID = selectionID
+            sceneQueue.async { [weak self] in
+                guard let self, let scene = self.scene else { return }
+                scene.group.filters = filters
+            }
             return
         }
 
-        let previousTime = seekToCurrentTime ? player?.currentTime() : nil
-        let wasPlaying = (player?.rate ?? 0) > 0
+        sceneQueue.async { [weak self] in
+            guard let self, let scene = self.scene else { return }
+            var filters = scene.group.filters
+            guard !filters.isEmpty else { return }
+            self.updateFiltersInPlace(&filters, entryID: selectionID, values: values, size: size)
+            scene.group.filters = filters
+        }
+    }
 
-        let item = AVPlayerItem(asset: compositionResult.composition)
-        item.videoComposition = compositionResult.videoComposition
-        item.audioMix = compositionResult.audioMix
-
-        if player == nil {
-            player = AVPlayer(playerItem: item)
-            player?.play()
-        } else {
-            player?.replaceCurrentItem(with: item)
-            if let previousTime {
-                player?.seek(to: previousTime)
-            }
-            if wasPlaying {
-                player?.play()
+    private func updateFiltersInPlace(
+        _ filters: inout [Filter],
+        entryID: String,
+        values: [String: Double],
+        size: CGSize
+    ) {
+        for (id, value) in values {
+            if let property = filterProperty(forParameterID: id) {
+                for filter in filters {
+                    filter.updateFilterValue(filterProperty: property, value: value)
+                }
             }
         }
 
-        errorMessage = nil
+        guard let firstFilter = filters.first else { return }
+
+        switch entryID {
+        case "scale":
+            if let filter = firstFilter as? Scale {
+                filter.centerPoint = CGPoint(
+                    x: size.width * (values["centerX"] ?? 0.5),
+                    y: size.height * (values["centerY"] ?? 0.5)
+                )
+            }
+        case "rotate":
+            if let filter = firstFilter as? Rotate {
+                filter.centerPoint = CGPoint(
+                    x: size.width * (values["centerX"] ?? 0.5),
+                    y: size.height * (values["centerY"] ?? 0.5)
+                )
+            }
+        case "mirror":
+            if let filter = firstFilter as? Mirror {
+                filter.point = CGPoint(
+                    x: size.width * (values["centerX"] ?? 0.5),
+                    y: size.height * (values["centerY"] ?? 0.5)
+                )
+                filter.angle = values["angle"] ?? filter.angle
+            }
+        case "translate":
+            if let filter = firstFilter as? Translate {
+                filter.translation = CGPoint(
+                    x: values["tx"] ?? 0.0,
+                    y: values["ty"] ?? 0.0
+                )
+            }
+        case "voronoi":
+            if let filter = firstFilter as? Voronoi {
+                filter.scale = values["scale"] ?? filter.scale
+                filter.radius = values["radius"] ?? filter.radius
+                filter.intensity = values["intensity"] ?? filter.intensity
+                filter.edgeIntensity = values["edge"] ?? filter.edgeIntensity
+                filter.colorVariation = values["color"] ?? filter.colorVariation
+                filter.driftSpeed = values["drift"] ?? filter.driftSpeed
+            }
+        case "jfa_voronoi":
+            if let filter = firstFilter as? JFAVoronoiFilter {
+                filter.particleCount = max(1, Int((values["particles"] ?? Double(filter.particleCount)).rounded()))
+                filter.intensity = values["intensity"] ?? filter.intensity
+                filter.edgeIntensity = values["edge"] ?? filter.edgeIntensity
+                filter.colorVariation = values["color"] ?? filter.colorVariation
+                filter.particleVelocity = values["velocity"] ?? filter.particleVelocity
+                filter.particleOrbitAmplitude = values["orbit"] ?? filter.particleOrbitAmplitude
+                filter.particleDriftSpeed = values["speed"] ?? filter.particleDriftSpeed
+                filter.particleJitter = values["jitter"] ?? filter.particleJitter
+            }
+        case "temporal_grid_shift":
+            if let filter = firstFilter as? TemporalGridShift {
+                filter.columns = max(1, Int((values["cols"] ?? Double(filter.columns)).rounded()))
+                filter.rows = max(1, Int((values["rows"] ?? Double(filter.rows)).rounded()))
+                filter.frameOffset = max(1, Int((values["offset"] ?? Double(filter.frameOffset)).rounded()))
+            }
+        case "temporal_texture_atlas":
+            if let filter = firstFilter as? TemporalTextureAtlasOutputsFilter {
+                let offset = max(0, Int((values["frameOffset"] ?? 0.0).rounded()))
+                let side = max(1, Int((values["frameSize"] ?? Double(Int(filter.inputFrameSize.width))).rounded()))
+                filter.frameOffsets = [offset]
+                filter.inputFrameSize = CGSize(width: CGFloat(side), height: CGFloat(side))
+            }
+        case "heatmap_frame_offset_atlas":
+            if let filter = firstFilter as? HeatmapFrameOffsetAtlasFilter {
+                let maxOffset = max(0, Int((values["maxOffset"] ?? Double(filter.maxFrameOffset)).rounded()))
+                let side = max(1, Int((values["frameSize"] ?? Double(Int(filter.inputFrameSize.width))).rounded()))
+                filter.maxFrameOffset = maxOffset
+                filter.inputFrameSize = CGSize(width: CGFloat(side), height: CGFloat(side))
+                filter.heatmapImage = Self.radialHeatmapImage(size: size)
+            }
+        case "linear_heatmap_frame_offset_atlas":
+            if let filter = firstFilter as? HeatmapFrameOffsetAtlasFilter {
+                let maxOffset = max(0, Int((values["maxOffset"] ?? Double(filter.maxFrameOffset)).rounded()))
+                let side = max(1, Int((values["frameSize"] ?? Double(Int(filter.inputFrameSize.width))).rounded()))
+                filter.maxFrameOffset = maxOffset
+                filter.inputFrameSize = CGSize(width: CGFloat(side), height: CGFloat(side))
+                filter.heatmapImage = Self.verticalHeatmapImage(size: size)
+            }
+        case "temporal_fade_atlas":
+            if let filter = firstFilter as? TemporalFadeAtlasFilter {
+                let frameCount = max(1, Int((values["frameCount"] ?? Double(filter.frameCount)).rounded()))
+                let frameSpacing = max(1, Int((values["frameSpacing"] ?? Double(filter.frameSpacing)).rounded()))
+                let side = max(1, Int((values["frameSize"] ?? Double(Int(filter.inputFrameSize.width))).rounded()))
+                filter.frameCount = frameCount
+                filter.frameSpacing = frameSpacing
+                filter.inputFrameSize = CGSize(width: CGFloat(side), height: CGFloat(side))
+            }
+        case "temporal_color_split_atlas":
+            if let filter = firstFilter as? TemporalColorSplitAtlasFilter {
+                let frameCount = max(1, Int((values["frameCount"] ?? Double(filter.frameCount)).rounded()))
+                let frameSpacing = max(1, Int((values["frameSpacing"] ?? Double(filter.frameSpacing)).rounded()))
+                let componentCount = max(1, Int((values["componentCount"] ?? Double(filter.componentCount)).rounded()))
+                let side = max(1, Int((values["frameSize"] ?? Double(Int(filter.inputFrameSize.width))).rounded()))
+                filter.frameCount = frameCount
+                filter.frameSpacing = frameSpacing
+                filter.componentCount = componentCount
+                filter.inputFrameSize = CGSize(width: CGFloat(side), height: CGFloat(side))
+            }
+        case "perlin_flow_field_atlas":
+            if let filter = firstFilter as? PerlinFlowFieldAtlasFilter {
+                let maxOffset = max(0, Int((values["maxOffset"] ?? Double(filter.maxFrameOffset)).rounded()))
+                let side = max(1, Int((values["frameSize"] ?? Double(Int(filter.inputFrameSize.width))).rounded()))
+                filter.maxFrameOffset = maxOffset
+                filter.noiseScale = values["noiseScale"] ?? filter.noiseScale
+                filter.flowSpeed = values["flowSpeed"] ?? filter.flowSpeed
+                filter.inputFrameSize = CGSize(width: CGFloat(side), height: CGFloat(side))
+            }
+        case "shake_filter":
+            if let filter = firstFilter as? ShakeFilter {
+                filter.translationAmplitude = CGPoint(
+                    x: values["tx"] ?? filter.translationAmplitude.x,
+                    y: values["ty"] ?? filter.translationAmplitude.y
+                )
+                filter.rotationAmplitude = values["rotation"] ?? filter.rotationAmplitude
+                filter.scaleAmplitude = values["scale"] ?? filter.scaleAmplitude
+                filter.speed = values["speed"] ?? filter.speed
+            }
+        default:
+            break
+        }
+    }
+
+    private func filterProperty(forParameterID id: String) -> FilterProperty? {
+        if let property = FilterProperty(rawValue: id) {
+            return property
+        }
+
+        switch id {
+        case "image1":
+            return .image1Amount
+        case "image2":
+            return .image2Amount
+        case "strength":
+            return .filterStrength
+        default:
+            return nil
+        }
+    }
+}
+
+extension FilterShowcaseViewModel: CameraSourceDelegate {
+    func didReceiveFrame(frame: Frame) {
+        let frameTime = CMTimeGetSeconds(frame.time)
+        let renderedImage: CIImage? = sceneQueue.sync { [weak self] in
+            guard let self, let scene = self.scene else { return nil }
+            return scene.group.renderGroup(
+                frameTime: frameTime,
+                compositionTimeOffset: 0.0,
+                inputImage: nil
+            )
+        }
+        
+        guard let renderedImage else {
+            return
+        }
+
+        let renderedSize = renderedImage.extent.size
+        let shouldApplyNewSize = !hasAppliedFirstFrameSize && renderedSize.width > 0 && renderedSize.height > 0
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.previewState.displayCIImage = renderedImage
+
+            if shouldApplyNewSize {
+                self.hasAppliedFirstFrameSize = true
+                self.currentRenderSize = renderedSize
+                self.applyCurrentSelection()
+            }
+        }
     }
 }
 
@@ -232,13 +401,13 @@ private extension FilterShowcaseViewModel {
 
     static func blendImage(size: CGSize) -> CIImage {
         let extent = CGRect(origin: .zero, size: size)
-
         let gradient = CIFilter.linearGradient()
         gradient.point0 = CGPoint(x: 0, y: 0)
         gradient.point1 = CGPoint(x: size.width, y: size.height)
         gradient.color0 = CIColor(red: 0.98, green: 0.22, blue: 0.18, alpha: 0.80)
         gradient.color1 = CIColor(red: 0.12, green: 0.56, blue: 1.00, alpha: 0.80)
-        let fallback = CIImage(color: CIColor.black).cropped(to: extent)
+
+        let fallback = CIImage(color: CIColor(red: 0.35, green: 0.35, blue: 0.35, alpha: 0.8)).cropped(to: extent)
         let base = (gradient.outputImage ?? fallback).cropped(to: extent)
 
         let controls = CIFilter.colorControls()
@@ -252,8 +421,8 @@ private extension FilterShowcaseViewModel {
         let extent = CGRect(origin: .zero, size: size)
         let gradient = CIFilter.radialGradient()
         gradient.center = CGPoint(x: size.width * 0.5, y: size.height * 0.5)
-        gradient.radius0 = min(size.width, size.height) * 0.08
-        gradient.radius1 = min(size.width, size.height) * 0.52
+        gradient.radius0 = Float(min(size.width, size.height)) * 0.08
+        gradient.radius1 = Float(min(size.width, size.height)) * 0.52
         gradient.color0 = CIColor(red: 1.0, green: 0.1, blue: 0.1, alpha: 1.0)
         gradient.color1 = CIColor.black
 
@@ -378,8 +547,10 @@ private extension FilterShowcaseViewModel {
                     p("ty", "Translate Y", -400.0...400.0, 0.0, step: 1.0)
                 ],
                 makeFilters: { values, _ in
-                    let point = CGPoint(x: values["tx"] ?? 0.0, y: values["ty"] ?? 0.0)
-                    return [Translate(translation: point, filterAnimators: [])]
+                    [Translate(
+                        translation: CGPoint(x: values["tx"] ?? 0.0, y: values["ty"] ?? 0.0),
+                        filterAnimators: []
+                    )]
                 }
             ),
             ShowcaseEntry(
@@ -453,6 +624,7 @@ private extension FilterShowcaseViewModel {
                     )]
                 }
             ),
+
             ShowcaseEntry(
                 id: "dissolve_blend",
                 name: "Dissolve Blend",
@@ -498,6 +670,14 @@ private extension FilterShowcaseViewModel {
                 makeFilters: { _, size in [MultiplyBlend(backgroundImage: blendImage(size: size), filterAnimators: [])] }
             ),
             ShowcaseEntry(
+                id: "divide_blend",
+                name: "Divide Blend",
+                subtitle: "CIDivideBlendMode",
+                category: "Blend",
+                parameters: [],
+                makeFilters: { _, size in [DivideBlend(backgroundImage: blendImage(size: size), filterAnimators: [])] }
+            ),
+            ShowcaseEntry(
                 id: "hard_light_blend",
                 name: "Hard Light Blend",
                 subtitle: "CIHardLightBlendMode",
@@ -514,130 +694,147 @@ private extension FilterShowcaseViewModel {
                 makeFilters: { _, size in [ColorDodgeBlend(backgroundImage: blendImage(size: size), filterAnimators: [])] }
             ),
             ShowcaseEntry(
+                id: "normal_blend",
+                name: "Normal Blend",
+                subtitle: "CISourceOverCompositing",
+                category: "Blend",
+                parameters: [],
+                makeFilters: { _, size in [NormalBlend(backgroundImage: blendImage(size: size), filterAnimators: [])] }
+            ),
+
+            ShowcaseEntry(
                 id: "sepia",
                 name: "Sepia Tone",
                 subtitle: "Classic sepia",
-                category: "Migrated",
+                category: "Color",
                 parameters: [p("intensity", "Intensity", 0.0...1.0, 0.8)],
-                makeFilters: { values, _ in [SepiaTone(intensity: values["intensity"] ?? 0.8, filterAnimators: [])] }
-            ),
-            ShowcaseEntry(
-                id: "film_grain",
-                name: "Film Grain",
-                subtitle: "Noise overlay",
-                category: "Migrated",
-                parameters: [p("intensity", "Intensity", 0.0...0.8, 0.22)],
-                makeFilters: { values, _ in [FilmGrain(intensity: values["intensity"] ?? 0.22, filterAnimators: [])] }
-            ),
-            ShowcaseEntry(
-                id: "edge_overlay",
-                name: "Edge Overlay",
-                subtitle: "Sketch-like edge blend",
-                category: "Migrated",
-                parameters: [
-                    p("edge", "Edge Intensity", 0.0...5.0, 2.0),
-                    p("mix", "Overlay Amount", 0.0...1.0, 0.5)
-                ],
                 makeFilters: { values, _ in
-                    [EdgeOverlay(
-                        edgeIntensity: values["edge"] ?? 2.0,
-                        overlayAmount: values["mix"] ?? 0.5,
+                    [SepiaTone(intensity: values["intensity"] ?? 0.8, filterAnimators: [])]
+                }
+            ),
+            ShowcaseEntry(
+                id: "monochrome",
+                name: "Monochrome Tone",
+                subtitle: "Color monochrome blend",
+                category: "Color",
+                parameters: [p("intensity", "Intensity", 0.0...1.0, 0.8)],
+                makeFilters: { values, _ in
+                    [MonochromeTone(
+                        color: CIColor(red: 0.95, green: 0.95, blue: 1.0, alpha: 1.0),
+                        intensity: values["intensity"] ?? 0.8,
                         filterAnimators: []
                     )]
                 }
             ),
             ShowcaseEntry(
-                id: "panel_split",
-                name: "Panel Split Effect",
-                subtitle: "Grid/panel stylizer",
-                category: "Migrated",
+                id: "false_color",
+                name: "False Color Blend",
+                subtitle: "Two-color remap",
+                category: "Color",
+                parameters: [p("intensity", "Intensity", 0.0...1.0, 0.6)],
+                makeFilters: { values, _ in
+                    [FalseColorBlend(
+                        firstColor: CIColor(red: 0.08, green: 0.02, blue: 0.6, alpha: 1.0),
+                        secondColor: CIColor(red: 1.0, green: 0.45, blue: 0.2, alpha: 1.0),
+                        intensity: values["intensity"] ?? 0.6,
+                        filterAnimators: []
+                    )]
+                }
+            ),
+            ShowcaseEntry(
+                id: "hsb_adjust",
+                name: "HSB Adjustment",
+                subtitle: "Hue/saturation/brightness",
+                category: "Color",
                 parameters: [
-                    p("columns", "Columns", 1.0...8.0, 3.0, step: 1.0),
-                    p("rows", "Rows", 1.0...8.0, 3.0, step: 1.0),
-                    p("gap", "Gap", 0.0...0.04, 0.008),
-                    p("hueShift", "Hue Shift Per Panel", 0.0...0.20, 0.03),
-                    p("saturation", "Saturation", 0.0...2.0, 1.08),
-                    p("brightness", "Brightness", -0.4...0.4, 0.0)
+                    p("hue", "Hue (rad)", -Double.pi...Double.pi, 0.0),
+                    p("saturation", "Saturation", 0.0...2.0, 1.0),
+                    p("brightness", "Brightness", -0.6...0.6, 0.0)
                 ],
                 makeFilters: { values, _ in
-                    [PanelSplitEffect(
-                        columns: max(1, Int((values["columns"] ?? 3.0).rounded())),
-                        rows: max(1, Int((values["rows"] ?? 3.0).rounded())),
-                        gap: values["gap"] ?? 0.008,
-                        hueShiftPerPanel: values["hueShift"] ?? 0.03,
-                        saturation: values["saturation"] ?? 1.08,
+                    [HSBAdjustment(
+                        hue: values["hue"] ?? 0.0,
+                        saturation: values["saturation"] ?? 1.0,
                         brightness: values["brightness"] ?? 0.0,
                         filterAnimators: []
                     )]
                 }
             ),
+
             ShowcaseEntry(
-                id: "flash_pulse",
-                name: "Flash Pulse",
-                subtitle: "Pulsing brightness",
-                category: "Migrated",
+                id: "comic",
+                name: "Comic Stylize",
+                subtitle: "CIComicEffect blend",
+                category: "Stylize",
+                parameters: [p("intensity", "Intensity", 0.0...1.0, 0.9)],
+                makeFilters: { values, _ in
+                    [ComicStylize(intensity: values["intensity"] ?? 0.9, filterAnimators: [])]
+                }
+            ),
+            ShowcaseEntry(
+                id: "kuwahara",
+                name: "Kuwahara (Metal)",
+                subtitle: "Painterly abstraction (custom Metal)",
+                category: "Stylize",
                 parameters: [
-                    p("brightness", "Base Brightness", -0.4...0.4, 0.0),
-                    p("amp", "Pulse Amplitude", 0.0...0.5, 0.18),
-                    p("speed", "Speed (Hz)", 0.2...12.0, 4.0),
-                    p("saturation", "Saturation", 0.0...2.0, 1.0),
-                    p("contrast", "Contrast", 0.5...2.0, 1.0)
+                    p("radius", "Radius", 1.0...20.0, 8.0, step: 1.0),
+                    p("intensity", "Intensity", 0.0...1.0, 1.0)
                 ],
                 makeFilters: { values, _ in
-                    [FlashPulse(
-                        baseBrightness: values["brightness"] ?? 0.0,
-                        pulseAmplitude: values["amp"] ?? 0.18,
-                        speedHz: values["speed"] ?? 4.0,
-                        saturation: values["saturation"] ?? 1.0,
-                        baseContrast: values["contrast"] ?? 1.0,
+                    [KuwaharaStylize(
+                        radius: values["radius"] ?? 8.0,
+                        intensity: values["intensity"] ?? 1.0,
                         filterAnimators: []
                     )]
                 }
             ),
             ShowcaseEntry(
-                id: "zoom_pulse",
-                name: "Zoom Pulse",
-                subtitle: "Time-varying zoom",
-                category: "Migrated",
-                parameters: [
-                    p("baseScale", "Base Scale", 0.6...1.8, 1.0),
-                    p("amp", "Amplitude", 0.0...0.8, 0.15),
-                    p("speed", "Speed (Hz)", 0.1...8.0, 2.0),
-                    p("centerX", "Center X", 0.0...1.0, 0.5),
-                    p("centerY", "Center Y", 0.0...1.0, 0.5)
-                ],
+                id: "glitch_effect",
+                name: "Glitch Effect",
+                subtitle: "Metal-backed glitch filter",
+                category: "Stylize",
+                parameters: [p("intensity", "Intensity", 0.0...3.0, 1.0)],
                 makeFilters: { values, _ in
-                    [ZoomPulse(
-                        baseScale: values["baseScale"] ?? 1.0,
-                        amplitude: values["amp"] ?? 0.15,
-                        speedHz: values["speed"] ?? 2.0,
-                        normalizedCenter: CGPoint(x: values["centerX"] ?? 0.5, y: values["centerY"] ?? 0.5),
-                        filterAnimators: []
-                    )]
+                    if #available(iOS 15.0, *) {
+                        return [GlitchEffect(intensity: values["intensity"] ?? 1.0, filterAnimators: [])]
+                    }
+                    return [ColorAdjustment(brightness: 0.0, contrast: 1.0, saturation: 1.0, filterAnimators: [])]
                 }
             ),
+
             ShowcaseEntry(
-                id: "temporal_low_pass",
-                name: "Temporal Low Pass",
-                subtitle: "Frame blending",
-                category: "Migrated",
-                parameters: [p("strength", "Filter Strength", 0.0...1.0, 0.35)],
+                id: "temporal_grid_shift",
+                name: "Temporal Grid Shift",
+                subtitle: "Grid cells shift up over time",
+                category: "Temporal",
+                parameters: [
+                    p("cols", "Columns", 2.0...6.0, 3.0, step: 1.0),
+                    p("rows", "Rows", 2.0...6.0, 3.0, step: 1.0),
+                    p("offset", "Frame Offset", 1.0...12.0, 1.0, step: 1.0)
+                ],
                 makeFilters: { values, _ in
-                    [TemporalLowPass(filterStrength: values["strength"] ?? 0.35, filterAnimators: [])]
+                    let cols = max(1, Int((values["cols"] ?? 3.0).rounded()))
+                    let rows = max(1, Int((values["rows"] ?? 3.0).rounded()))
+                    let offset = max(1, Int((values["offset"] ?? 1.0).rounded()))
+                    return [TemporalGridShift(columns: cols, rows: rows, frameOffset: offset, filterAnimators: [])]
                 }
             ),
             ShowcaseEntry(
                 id: "temporal_texture_atlas",
                 name: "Temporal Texture Atlas",
-                subtitle: "Atlas-backed temporal offset",
-                category: "Migrated",
-                parameters: [p("frameOffset", "Frame Offset", 0.0...240.0, 0.0, step: 1.0)],
+                subtitle: "Max-texture ring buffer with frame offset",
+                category: "Temporal",
+                parameters: [
+                    p("frameOffset", "Frame Offset", 0.0...240.0, 0.0, step: 1.0),
+                    p("frameSize", "Input Frame Size", 128.0...2048.0, 1024.0, step: 64.0)
+                ],
                 makeFilters: { values, _ in
                     let offset = Int((values["frameOffset"] ?? 0.0).rounded())
+                    let side = max(1, Int((values["frameSize"] ?? 1024.0).rounded()))
                     return [TemporalTextureAtlasOutputsFilter(
                         frameOffsets: [offset],
                         primaryOutputIndex: 0,
-                        inputFrameSize: CGSize(width: 1024, height: 1024),
+                        inputFrameSize: CGSize(width: CGFloat(side), height: CGFloat(side)),
                         filterAnimators: []
                     )]
                 }
@@ -645,8 +842,8 @@ private extension FilterShowcaseViewModel {
             ShowcaseEntry(
                 id: "heatmap_frame_offset_atlas",
                 name: "Heatmap Frame Offset Atlas",
-                subtitle: "Radial heatmap drives per-pixel temporal offset",
-                category: "Migrated",
+                subtitle: "Radial heatmap drives per-pixel temporal history",
+                category: "Temporal",
                 parameters: [
                     p("maxOffset", "Max Frame Offset", 0.0...240.0, 48.0, step: 1.0),
                     p("frameSize", "Input Frame Size", 128.0...2048.0, 1024.0, step: 64.0)
@@ -665,8 +862,8 @@ private extension FilterShowcaseViewModel {
             ShowcaseEntry(
                 id: "linear_heatmap_frame_offset_atlas",
                 name: "Linear Heatmap Frame Offset Atlas",
-                subtitle: "Top-to-bottom heatmap drives per-pixel temporal offset",
-                category: "Migrated",
+                subtitle: "Top-to-bottom heatmap drives per-pixel temporal history",
+                category: "Temporal",
                 parameters: [
                     p("maxOffset", "Max Frame Offset", 0.0...240.0, 48.0, step: 1.0),
                     p("frameSize", "Input Frame Size", 128.0...2048.0, 1024.0, step: 64.0)
@@ -686,7 +883,7 @@ private extension FilterShowcaseViewModel {
                 id: "temporal_fade_atlas",
                 name: "Temporal Fade Atlas",
                 subtitle: "Averages spaced frame samples across time",
-                category: "Migrated",
+                category: "Temporal",
                 parameters: [
                     p("frameCount", "Frame Count", 1.0...15.0, 8.0, step: 1.0),
                     p("frameSpacing", "Frame Spacing", 1.0...12.0, 2.0, step: 1.0),
@@ -708,7 +905,7 @@ private extension FilterShowcaseViewModel {
                 id: "temporal_color_split_atlas",
                 name: "Temporal Color Split Atlas",
                 subtitle: "Palette-tinted temporal samples blended across time",
-                category: "Migrated",
+                category: "Temporal",
                 parameters: [
                     p("frameCount", "Frame Count", 1.0...15.0, 8.0, step: 1.0),
                     p("frameSpacing", "Frame Spacing", 1.0...12.0, 2.0, step: 1.0),
@@ -730,116 +927,33 @@ private extension FilterShowcaseViewModel {
                 }
             ),
             ShowcaseEntry(
-                id: "comic",
-                name: "Comic Stylize",
-                subtitle: "CIComicEffect blend",
-                category: "Migrated",
-                parameters: [p("intensity", "Intensity", 0.0...1.0, 0.9)],
-                makeFilters: { values, _ in [ComicStylize(intensity: values["intensity"] ?? 0.9, filterAnimators: [])] }
-            ),
-            ShowcaseEntry(
-                id: "thermal",
-                name: "Thermal Stylize",
-                subtitle: "CIThermal blend",
-                category: "Migrated",
-                parameters: [p("intensity", "Intensity", 0.0...1.0, 0.9)],
-                makeFilters: { values, _ in [ThermalStylize(intensity: values["intensity"] ?? 0.9, filterAnimators: [])] }
-            ),
-            ShowcaseEntry(
-                id: "monochrome",
-                name: "Monochrome Tone",
-                subtitle: "Color monochrome blend",
-                category: "Migrated",
-                parameters: [p("intensity", "Intensity", 0.0...1.0, 0.8)],
-                makeFilters: { values, _ in
-                    [MonochromeTone(
-                        color: CIColor(red: 0.95, green: 0.95, blue: 1.0, alpha: 1.0),
-                        intensity: values["intensity"] ?? 0.8,
-                        filterAnimators: []
-                    )]
-                }
-            ),
-            ShowcaseEntry(
-                id: "false_color",
-                name: "False Color Blend",
-                subtitle: "Two-color remap",
-                category: "Migrated",
-                parameters: [p("intensity", "Intensity", 0.0...1.0, 0.6)],
-                makeFilters: { values, _ in
-                    [FalseColorBlend(
-                        firstColor: CIColor(red: 0.08, green: 0.02, blue: 0.6, alpha: 1.0),
-                        secondColor: CIColor(red: 1.0, green: 0.45, blue: 0.2, alpha: 1.0),
-                        intensity: values["intensity"] ?? 0.6,
-                        filterAnimators: []
-                    )]
-                }
-            ),
-            ShowcaseEntry(
-                id: "hsb_adjust",
-                name: "HSB Adjustment",
-                subtitle: "Hue/saturation/brightness",
-                category: "Migrated",
+                id: "perlin_flow_field_atlas",
+                name: "Perlin Flow Field Atlas",
+                subtitle: "Per-pixel temporal offsets from Metal noise field",
+                category: "Temporal",
                 parameters: [
-                    p("hue", "Hue (rad)", -Double.pi...Double.pi, 0.0),
-                    p("saturation", "Saturation", 0.0...2.0, 1.0),
-                    p("brightness", "Brightness", -0.6...0.6, 0.0)
+                    p("maxOffset", "Max Frame Offset", 0.0...240.0, 24.0, step: 1.0),
+                    p("noiseScale", "Noise Scale", 1.0...40.0, 8.0, step: 0.25),
+                    p("flowSpeed", "Flow Speed", 0.0...2.0, 0.18, step: 0.01),
+                    p("frameSize", "Input Frame Size", 128.0...2048.0, 1024.0, step: 64.0)
                 ],
                 makeFilters: { values, _ in
-                    [HSBAdjustment(
-                        hue: values["hue"] ?? 0.0,
-                        saturation: values["saturation"] ?? 1.0,
-                        brightness: values["brightness"] ?? 0.0,
+                    let maxOffset = max(0, Int((values["maxOffset"] ?? 24.0).rounded()))
+                    let side = max(1, Int((values["frameSize"] ?? 1024.0).rounded()))
+                    return [PerlinFlowFieldAtlasFilter(
+                        maxFrameOffset: maxOffset,
+                        noiseScale: values["noiseScale"] ?? 8.0,
+                        flowSpeed: values["flowSpeed"] ?? 0.18,
+                        inputFrameSize: CGSize(width: CGFloat(side), height: CGFloat(side)),
                         filterAnimators: []
                     )]
                 }
             ),
             ShowcaseEntry(
-                id: "alpha_vignette",
-                name: "Alpha Vignette",
-                subtitle: "Alpha edge fade",
-                category: "Migrated",
-                parameters: [
-                    p("start", "Start", 0.1...0.8, 0.3),
-                    p("end", "End", 0.2...1.0, 0.85),
-                    p("outerAlpha", "Outer Alpha", 0.0...1.0, 0.2)
-                ],
-                makeFilters: { values, _ in
-                    [AlphaVignette(
-                        center: CGPoint(x: 0.5, y: 0.5),
-                        start: values["start"] ?? 0.3,
-                        end: values["end"] ?? 0.85,
-                        innerAlpha: 1.0,
-                        outerAlpha: values["outerAlpha"] ?? 0.2,
-                        filterAnimators: []
-                    )]
-                }
-            ),
-            ShowcaseEntry(
-                id: "color_vignette",
-                name: "Color Vignette",
-                subtitle: "Tinted edge overlay",
-                category: "Migrated",
-                parameters: [
-                    p("start", "Start", 0.1...0.8, 0.35),
-                    p("end", "End", 0.2...1.0, 0.90),
-                    p("alpha", "Ring Alpha", 0.0...1.0, 0.35)
-                ],
-                makeFilters: { values, _ in
-                    [ColorVignette(
-                        center: CGPoint(x: 0.5, y: 0.5),
-                        centerColor: CIColor(red: 0, green: 0, blue: 0, alpha: 0.0),
-                        ringColor: CIColor(red: 0, green: 0, blue: 0, alpha: values["alpha"] ?? 0.35),
-                        start: values["start"] ?? 0.35,
-                        end: values["end"] ?? 0.9,
-                        filterAnimators: []
-                    )]
-                }
-            ),
-            ShowcaseEntry(
-                id: "shake_jitter",
-                name: "Shake Jitter",
-                subtitle: "Time-varying transform shake",
-                category: "Migrated",
+                id: "shake_filter",
+                name: "Shake Filter",
+                subtitle: "Transform shake",
+                category: "Temporal",
                 parameters: [
                     p("tx", "Translation X", 0.0...0.08, 0.02),
                     p("ty", "Translation Y", 0.0...0.08, 0.02),
@@ -848,7 +962,7 @@ private extension FilterShowcaseViewModel {
                     p("speed", "Speed (Hz)", 0.2...12.0, 5.5)
                 ],
                 makeFilters: { values, _ in
-                    [ShakeJitter(
+                    [ShakeFilter(
                         translationAmplitude: CGPoint(x: values["tx"] ?? 0.02, y: values["ty"] ?? 0.02),
                         rotationAmplitude: values["rotation"] ?? 0.05,
                         scaleAmplitude: values["scale"] ?? 0.06,
@@ -857,72 +971,12 @@ private extension FilterShowcaseViewModel {
                     )]
                 }
             ),
-            ShowcaseEntry(
-                id: "hue_pulse",
-                name: "Hue Pulse",
-                subtitle: "Animated hue modulation",
-                category: "Migrated",
-                parameters: [
-                    p("baseHue", "Base Hue", -Double.pi...Double.pi, 0.0),
-                    p("amp", "Hue Amplitude", 0.0...Double.pi, 0.45),
-                    p("speed", "Speed (Hz)", 0.1...8.0, 1.3),
-                    p("saturation", "Saturation", 0.0...2.0, 1.2),
-                    p("brightness", "Brightness", -0.5...0.5, 0.0),
-                    p("contrast", "Contrast", 0.5...2.0, 1.06)
-                ],
-                makeFilters: { values, _ in
-                    [HuePulse(
-                        baseHue: values["baseHue"] ?? 0.0,
-                        hueAmplitude: values["amp"] ?? 0.45,
-                        speedHz: values["speed"] ?? 1.3,
-                        saturation: values["saturation"] ?? 1.2,
-                        brightness: values["brightness"] ?? 0.0,
-                        contrast: values["contrast"] ?? 1.06,
-                        filterAnimators: []
-                    )]
-                }
-            ),
-            ShowcaseEntry(
-                id: "twirl_pulse",
-                name: "Twirl Pulse",
-                subtitle: "Animated twirl distortion",
-                category: "Migrated",
-                parameters: [
-                    p("radius", "Radius", 0.05...1.0, 0.45),
-                    p("angle", "Angle Amplitude", 0.0...3.0, 1.2),
-                    p("speed", "Speed (Hz)", 0.1...6.0, 0.9),
-                    p("centerX", "Center X", 0.0...1.0, 0.5),
-                    p("centerY", "Center Y", 0.0...1.0, 0.5)
-                ],
-                makeFilters: { values, _ in
-                    [TwirlPulse(
-                        normalizedCenter: CGPoint(x: values["centerX"] ?? 0.5, y: values["centerY"] ?? 0.5),
-                        normalizedRadius: values["radius"] ?? 0.45,
-                        angleAmplitude: values["angle"] ?? 1.2,
-                        speedHz: values["speed"] ?? 0.9,
-                        filterAnimators: []
-                    )]
-                }
-            ),
-            ShowcaseEntry(
-                id: "glitch_effect",
-                name: "Glitch Effect",
-                subtitle: "Metal-backed glitch filter",
-                category: "Migrated",
-                parameters: [p("intensity", "Intensity", 0.0...3.0, 1.0)],
-                makeFilters: { values, _ in
-                    if #available(iOS 15.0, *) {
-                        return [GlitchEffect(intensity: values["intensity"] ?? 1.0, filterAnimators: [])]
-                    } else {
-                        return [ColorAdjustment(brightness: 0.0, contrast: 1.0, saturation: 1.0, filterAnimators: [])]
-                    }
-                }
-            ),
+
             ShowcaseEntry(
                 id: "bloom_glow",
                 name: "Bloom Glow",
                 subtitle: "Highlight bloom",
-                category: "Migrated",
+                category: "Vignette",
                 parameters: [
                     p("radius", "Radius", 0.0...40.0, 12.0, step: 0.5),
                     p("intensity", "Intensity", 0.0...2.0, 0.5)
@@ -934,92 +988,8 @@ private extension FilterShowcaseViewModel {
                         filterAnimators: []
                     )]
                 }
-            ),
-            ShowcaseEntry(
-                id: "kuwahara",
-                name: "Kuwahara (Metal)",
-                subtitle: "Painterly abstraction (custom Metal)",
-                category: "Migrated",
-                parameters: [
-                    p("radius", "Radius", 1.0...20.0, 8.0, step: 1.0),
-                    p("intensity", "Intensity", 0.0...1.0, 1.0)
-                ],
-                makeFilters: { values, _ in
-                    [KuwaharaStylize(
-                        radius: values["radius"] ?? 8.0,
-                        intensity: values["intensity"] ?? 1.0,
-                        filterAnimators: []
-                    )]
-                }
-            ),
-            ShowcaseEntry(
-                id: "line_sketch",
-                name: "Line Sketch",
-                subtitle: "Take On Me-style edges",
-                category: "Migrated",
-                parameters: [p("edge", "Edge Strength", 0.0...4.0, 1.45)],
-                makeFilters: { values, _ in
-                    [LineSketch(edgeStrength: values["edge"] ?? 1.45, invert: true, filterAnimators: [])]
-                }
-            ),
-            ShowcaseEntry(
-                id: "impressionist",
-                name: "Impressionist Paint",
-                subtitle: "Brush-stroke abstraction",
-                category: "Migrated",
-                parameters: [
-                    p("radius", "Stroke Radius", 1.0...30.0, 9.0, step: 1.0),
-                    p("softness", "Softness", 0.0...1.0, 0.35)
-                ],
-                makeFilters: { values, _ in
-                    [ImpressionistPaint(
-                        strokeRadius: values["radius"] ?? 9.0,
-                        softness: values["softness"] ?? 0.35,
-                        filterAnimators: []
-                    )]
-                }
-            ),
-            ShowcaseEntry(
-                id: "body_electric",
-                name: "Body Electric",
-                subtitle: "Neon edge glow",
-                category: "Migrated",
-                parameters: [
-                    p("edge", "Edge Intensity", 0.0...5.0, 2.25),
-                    p("glow", "Glow Amount", 0.0...1.5, 0.50),
-                    p("hue", "Color Shift", 0.0...0.5, 0.11)
-                ],
-                makeFilters: { values, _ in
-                    [BodyElectric(
-                        edgeIntensity: values["edge"] ?? 2.25,
-                        glowAmount: values["glow"] ?? 0.50,
-                        colorShift: values["hue"] ?? 0.11,
-                        filterAnimators: []
-                    )]
-                }
             )
         ]
     }
 
-    static func makeStyleEntries() -> [ShowcaseEntry] {
-        var seen = Set<String>()
-        return ShimmeoStyleRecipeFactory.supportedStorageNames.compactMap { storageName in
-            guard !seen.contains(storageName) else { return nil }
-            seen.insert(storageName)
-
-            return ShowcaseEntry(
-                id: storageName,
-                name: storageName,
-                subtitle: "Shimmeo style recipe",
-                category: "Styles",
-                parameters: [],
-                makeFilters: { _, _ in
-                    guard let recipe = ShimmeoStyleRecipeFactory.recipe(forStorageName: storageName) else {
-                        return []
-                    }
-                    return recipe.makeFilters()
-                }
-            )
-        }
-    }
 }

@@ -365,10 +365,6 @@ final class VideoFilterViewModel: NSObject, ObservableObject {
                     y: values["ty"] ?? 0.0
                 )
             }
-        case "line_sketch":
-            if let filter = firstFilter as? LineSketch {
-                filter.edgeStrength = values["edge"] ?? filter.edgeStrength
-            }
         case "voronoi":
             if let filter = firstFilter as? Voronoi {
                 filter.scale = values["scale"] ?? filter.scale
@@ -388,49 +384,6 @@ final class VideoFilterViewModel: NSObject, ObservableObject {
                 filter.particleOrbitAmplitude = values["orbit"] ?? filter.particleOrbitAmplitude
                 filter.particleDriftSpeed = values["speed"] ?? filter.particleDriftSpeed
                 filter.particleJitter = values["jitter"] ?? filter.particleJitter
-            }
-        case "impressionist":
-            if let filter = firstFilter as? ImpressionistPaint {
-                filter.strokeRadius = values["radius"] ?? filter.strokeRadius
-                filter.softness = values["softness"] ?? filter.softness
-            }
-        case "body_electric":
-            if let filter = firstFilter as? BodyElectric {
-                filter.edgeIntensity = values["edge"] ?? filter.edgeIntensity
-                filter.glowAmount = values["glow"] ?? filter.glowAmount
-                filter.colorShift = values["hue"] ?? filter.colorShift
-            }
-        case "edge_overlay":
-            if let filter = firstFilter as? EdgeOverlay {
-                filter.edgeIntensity = values["edge"] ?? filter.edgeIntensity
-                filter.overlayAmount = values["mix"] ?? filter.overlayAmount
-            }
-        case "panel_split":
-            if let filter = firstFilter as? PanelSplitEffect {
-                filter.columns = max(1, Int((values["columns"] ?? Double(filter.columns)).rounded()))
-                filter.rows = max(1, Int((values["rows"] ?? Double(filter.rows)).rounded()))
-                filter.gap = values["gap"] ?? filter.gap
-                filter.hueShiftPerPanel = values["hueShift"] ?? filter.hueShiftPerPanel
-                filter.saturation = values["saturation"] ?? filter.saturation
-                filter.brightness = values["brightness"] ?? filter.brightness
-            }
-        case "flash_pulse":
-            if let filter = firstFilter as? FlashPulse {
-                filter.baseBrightness = values["brightness"] ?? filter.baseBrightness
-                filter.pulseAmplitude = values["amp"] ?? filter.pulseAmplitude
-                filter.speedHz = values["speed"] ?? filter.speedHz
-                filter.saturation = values["saturation"] ?? filter.saturation
-                filter.baseContrast = values["contrast"] ?? filter.baseContrast
-            }
-        case "zoom_pulse":
-            if let filter = firstFilter as? ZoomPulse {
-                filter.baseScale = values["baseScale"] ?? filter.baseScale
-                filter.amplitude = values["amp"] ?? filter.amplitude
-                filter.speedHz = values["speed"] ?? filter.speedHz
-                filter.normalizedCenter = CGPoint(
-                    x: values["centerX"] ?? filter.normalizedCenter.x,
-                    y: values["centerY"] ?? filter.normalizedCenter.y
-                )
             }
         case "temporal_grid_shift":
             if let filter = firstFilter as? TemporalGridShift {
@@ -490,56 +443,15 @@ final class VideoFilterViewModel: NSObject, ObservableObject {
                 filter.flowSpeed = values["flowSpeed"] ?? filter.flowSpeed
                 filter.inputFrameSize = CGSize(width: CGFloat(side), height: CGFloat(side))
             }
-        case "shake_jitter":
-            if let filter = firstFilter as? ShakeJitter {
+        case "shake_filter":
+            if let filter = firstFilter as? ShakeFilter {
                 filter.translationAmplitude = CGPoint(
                     x: values["tx"] ?? filter.translationAmplitude.x,
                     y: values["ty"] ?? filter.translationAmplitude.y
                 )
                 filter.rotationAmplitude = values["rotation"] ?? filter.rotationAmplitude
                 filter.scaleAmplitude = values["scale"] ?? filter.scaleAmplitude
-                filter.speedHz = values["speed"] ?? filter.speedHz
-            }
-        case "hue_pulse":
-            if let filter = firstFilter as? HuePulse {
-                filter.baseHue = values["baseHue"] ?? filter.baseHue
-                filter.hueAmplitude = values["amp"] ?? filter.hueAmplitude
-                filter.speedHz = values["speed"] ?? filter.speedHz
-                filter.saturation = values["saturation"] ?? filter.saturation
-                filter.brightness = values["brightness"] ?? filter.brightness
-                filter.contrast = values["contrast"] ?? filter.contrast
-            }
-        case "twirl_pulse":
-            if let filter = firstFilter as? TwirlPulse {
-                filter.normalizedCenter = CGPoint(
-                    x: values["centerX"] ?? filter.normalizedCenter.x,
-                    y: values["centerY"] ?? filter.normalizedCenter.y
-                )
-                filter.normalizedRadius = values["radius"] ?? filter.normalizedRadius
-                filter.angleAmplitude = values["angle"] ?? filter.angleAmplitude
-                filter.speedHz = values["speed"] ?? filter.speedHz
-            }
-        case "alpha_vignette":
-            if let filter = firstFilter as? AlphaVignette {
-                filter.center = CGPoint(
-                    x: values["centerX"] ?? filter.center.x,
-                    y: values["centerY"] ?? filter.center.y
-                )
-                filter.start = values["start"] ?? filter.start
-                filter.end = values["end"] ?? filter.end
-                filter.innerAlpha = values["inner"] ?? filter.innerAlpha
-                filter.outerAlpha = values["outer"] ?? filter.outerAlpha
-            }
-        case "color_vignette":
-            if let filter = firstFilter as? ColorVignette {
-                filter.center = CGPoint(
-                    x: values["centerX"] ?? filter.center.x,
-                    y: values["centerY"] ?? filter.center.y
-                )
-                filter.start = values["start"] ?? filter.start
-                filter.end = values["end"] ?? filter.end
-                let alpha = values["alpha"] ?? Double(filter.ringColor.alpha)
-                filter.ringColor = CIColor(red: 0, green: 0, blue: 0, alpha: alpha)
+                filter.speed = values["speed"] ?? filter.speed
             }
         default:
             break
@@ -1037,16 +949,6 @@ private extension VideoFilterViewModel {
                 }
             ),
             ShowcaseEntry(
-                id: "thermal",
-                name: "Thermal Stylize",
-                subtitle: "CIThermal blend",
-                category: "Stylize",
-                parameters: [p("intensity", "Intensity", 0.0...1.0, 0.9)],
-                makeFilters: { values, _ in
-                    [ThermalStylize(intensity: values["intensity"] ?? 0.9, filterAnimators: [])]
-                }
-            ),
-            ShowcaseEntry(
                 id: "kuwahara",
                 name: "Kuwahara (Metal)",
                 subtitle: "Painterly abstraction (custom Metal)",
@@ -1059,52 +961,6 @@ private extension VideoFilterViewModel {
                     [KuwaharaStylize(
                         radius: values["radius"] ?? 8.0,
                         intensity: values["intensity"] ?? 1.0,
-                        filterAnimators: []
-                    )]
-                }
-            ),
-            ShowcaseEntry(
-                id: "line_sketch",
-                name: "Line Sketch",
-                subtitle: "Take On Me-style edges",
-                category: "Stylize",
-                parameters: [p("edge", "Edge Strength", 0.0...4.0, 1.45)],
-                makeFilters: { values, _ in
-                    [LineSketch(edgeStrength: values["edge"] ?? 1.45, invert: true, filterAnimators: [])]
-                }
-            ),
-            ShowcaseEntry(
-                id: "impressionist",
-                name: "Impressionist Paint",
-                subtitle: "Brush-stroke abstraction",
-                category: "Stylize",
-                parameters: [
-                    p("radius", "Stroke Radius", 1.0...30.0, 9.0, step: 1.0),
-                    p("softness", "Softness", 0.0...1.0, 0.35)
-                ],
-                makeFilters: { values, _ in
-                    [ImpressionistPaint(
-                        strokeRadius: values["radius"] ?? 9.0,
-                        softness: values["softness"] ?? 0.35,
-                        filterAnimators: []
-                    )]
-                }
-            ),
-            ShowcaseEntry(
-                id: "body_electric",
-                name: "Body Electric",
-                subtitle: "Neon edge glow",
-                category: "Stylize",
-                parameters: [
-                    p("edge", "Edge Intensity", 0.0...5.0, 2.25),
-                    p("glow", "Glow Amount", 0.0...1.5, 0.50),
-                    p("hue", "Color Shift", 0.0...0.5, 0.11)
-                ],
-                makeFilters: { values, _ in
-                    [BodyElectric(
-                        edgeIntensity: values["edge"] ?? 2.25,
-                        glowAmount: values["glow"] ?? 0.50,
-                        colorShift: values["hue"] ?? 0.11,
                         filterAnimators: []
                     )]
                 }
@@ -1123,113 +979,6 @@ private extension VideoFilterViewModel {
                 }
             ),
 
-            ShowcaseEntry(
-                id: "film_grain",
-                name: "Film Grain",
-                subtitle: "Noise overlay",
-                category: "Effects",
-                parameters: [p("intensity", "Intensity", 0.0...0.8, 0.22)],
-                makeFilters: { values, _ in
-                    [FilmGrain(intensity: values["intensity"] ?? 0.22, filterAnimators: [])]
-                }
-            ),
-            ShowcaseEntry(
-                id: "edge_overlay",
-                name: "Edge Overlay",
-                subtitle: "Sketch-like edge blend",
-                category: "Effects",
-                parameters: [
-                    p("edge", "Edge Intensity", 0.0...5.0, 2.0),
-                    p("mix", "Overlay Amount", 0.0...1.0, 0.5)
-                ],
-                makeFilters: { values, _ in
-                    [EdgeOverlay(
-                        edgeIntensity: values["edge"] ?? 2.0,
-                        overlayAmount: values["mix"] ?? 0.5,
-                        filterAnimators: []
-                    )]
-                }
-            ),
-            ShowcaseEntry(
-                id: "panel_split",
-                name: "Panel Split Effect",
-                subtitle: "Grid/panel stylizer",
-                category: "Effects",
-                parameters: [
-                    p("columns", "Columns", 1.0...8.0, 3.0, step: 1.0),
-                    p("rows", "Rows", 1.0...8.0, 3.0, step: 1.0),
-                    p("gap", "Gap", 0.0...0.04, 0.008),
-                    p("hueShift", "Hue Shift Per Panel", 0.0...0.20, 0.03),
-                    p("saturation", "Saturation", 0.0...2.0, 1.08),
-                    p("brightness", "Brightness", -0.4...0.4, 0.0)
-                ],
-                makeFilters: { values, _ in
-                    [PanelSplitEffect(
-                        columns: max(1, Int((values["columns"] ?? 3.0).rounded())),
-                        rows: max(1, Int((values["rows"] ?? 3.0).rounded())),
-                        gap: values["gap"] ?? 0.008,
-                        hueShiftPerPanel: values["hueShift"] ?? 0.03,
-                        saturation: values["saturation"] ?? 1.08,
-                        brightness: values["brightness"] ?? 0.0,
-                        filterAnimators: []
-                    )]
-                }
-            ),
-            ShowcaseEntry(
-                id: "flash_pulse",
-                name: "Flash Pulse",
-                subtitle: "Pulsing brightness",
-                category: "Temporal",
-                parameters: [
-                    p("brightness", "Base Brightness", -0.4...0.4, 0.0),
-                    p("amp", "Pulse Amplitude", 0.0...0.5, 0.18),
-                    p("speed", "Speed (Hz)", 0.2...12.0, 4.0),
-                    p("saturation", "Saturation", 0.0...2.0, 1.0),
-                    p("contrast", "Contrast", 0.5...2.0, 1.0)
-                ],
-                makeFilters: { values, _ in
-                    [FlashPulse(
-                        baseBrightness: values["brightness"] ?? 0.0,
-                        pulseAmplitude: values["amp"] ?? 0.18,
-                        speedHz: values["speed"] ?? 4.0,
-                        saturation: values["saturation"] ?? 1.0,
-                        baseContrast: values["contrast"] ?? 1.0,
-                        filterAnimators: []
-                    )]
-                }
-            ),
-            ShowcaseEntry(
-                id: "zoom_pulse",
-                name: "Zoom Pulse",
-                subtitle: "Time-varying zoom",
-                category: "Temporal",
-                parameters: [
-                    p("baseScale", "Base Scale", 0.6...1.8, 1.0),
-                    p("amp", "Amplitude", 0.0...0.8, 0.15),
-                    p("speed", "Speed (Hz)", 0.1...8.0, 2.0),
-                    p("centerX", "Center X", 0.0...1.0, 0.5),
-                    p("centerY", "Center Y", 0.0...1.0, 0.5)
-                ],
-                makeFilters: { values, _ in
-                    [ZoomPulse(
-                        baseScale: values["baseScale"] ?? 1.0,
-                        amplitude: values["amp"] ?? 0.15,
-                        speedHz: values["speed"] ?? 2.0,
-                        normalizedCenter: CGPoint(x: values["centerX"] ?? 0.5, y: values["centerY"] ?? 0.5),
-                        filterAnimators: []
-                    )]
-                }
-            ),
-            ShowcaseEntry(
-                id: "temporal_low_pass",
-                name: "Temporal Low Pass",
-                subtitle: "Frame blending",
-                category: "Temporal",
-                parameters: [p("strength", "Filter Strength", 0.0...1.0, 0.35)],
-                makeFilters: { values, _ in
-                    [TemporalLowPass(filterStrength: values["strength"] ?? 0.35, filterAnimators: [])]
-                }
-            ),
             ShowcaseEntry(
                 id: "temporal_grid_shift",
                 name: "Temporal Grid Shift",
@@ -1378,8 +1127,8 @@ private extension VideoFilterViewModel {
                 }
             ),
             ShowcaseEntry(
-                id: "shake_jitter",
-                name: "Shake Jitter",
+                id: "shake_filter",
+                name: "Shake Filter",
                 subtitle: "Transform shake",
                 category: "Temporal",
                 parameters: [
@@ -1390,7 +1139,7 @@ private extension VideoFilterViewModel {
                     p("speed", "Speed (Hz)", 0.2...12.0, 5.5)
                 ],
                 makeFilters: { values, _ in
-                    [ShakeJitter(
+                    [ShakeFilter(
                         translationAmplitude: CGPoint(x: values["tx"] ?? 0.02, y: values["ty"] ?? 0.02),
                         rotationAmplitude: values["rotation"] ?? 0.05,
                         scaleAmplitude: values["scale"] ?? 0.06,
@@ -1399,101 +1148,7 @@ private extension VideoFilterViewModel {
                     )]
                 }
             ),
-            ShowcaseEntry(
-                id: "hue_pulse",
-                name: "Hue Pulse",
-                subtitle: "Animated hue modulation",
-                category: "Temporal",
-                parameters: [
-                    p("baseHue", "Base Hue", -Double.pi...Double.pi, 0.0),
-                    p("amp", "Hue Amplitude", 0.0...Double.pi, 0.45),
-                    p("speed", "Speed (Hz)", 0.1...8.0, 1.3),
-                    p("saturation", "Saturation", 0.0...2.0, 1.2),
-                    p("brightness", "Brightness", -0.5...0.5, 0.0),
-                    p("contrast", "Contrast", 0.5...2.0, 1.06)
-                ],
-                makeFilters: { values, _ in
-                    [HuePulse(
-                        baseHue: values["baseHue"] ?? 0.0,
-                        hueAmplitude: values["amp"] ?? 0.45,
-                        speedHz: values["speed"] ?? 1.3,
-                        saturation: values["saturation"] ?? 1.2,
-                        brightness: values["brightness"] ?? 0.0,
-                        contrast: values["contrast"] ?? 1.06,
-                        filterAnimators: []
-                    )]
-                }
-            ),
-            ShowcaseEntry(
-                id: "twirl_pulse",
-                name: "Twirl Pulse",
-                subtitle: "Animated twirl distortion",
-                category: "Temporal",
-                parameters: [
-                    p("radius", "Radius", 0.05...1.0, 0.45),
-                    p("angle", "Angle Amplitude", 0.0...3.0, 1.2),
-                    p("speed", "Speed (Hz)", 0.1...6.0, 0.9),
-                    p("centerX", "Center X", 0.0...1.0, 0.5),
-                    p("centerY", "Center Y", 0.0...1.0, 0.5)
-                ],
-                makeFilters: { values, _ in
-                    [TwirlPulse(
-                        normalizedCenter: CGPoint(x: values["centerX"] ?? 0.5, y: values["centerY"] ?? 0.5),
-                        normalizedRadius: values["radius"] ?? 0.45,
-                        angleAmplitude: values["angle"] ?? 1.2,
-                        speedHz: values["speed"] ?? 0.9,
-                        filterAnimators: []
-                    )]
-                }
-            ),
 
-            ShowcaseEntry(
-                id: "alpha_vignette",
-                name: "Alpha Vignette",
-                subtitle: "Alpha edge fade",
-                category: "Vignette",
-                parameters: [
-                    p("start", "Start", 0.1...0.8, 0.3),
-                    p("end", "End", 0.2...1.0, 0.85),
-                    p("inner", "Inner Alpha", 0.0...1.0, 1.0),
-                    p("outer", "Outer Alpha", 0.0...1.0, 0.2),
-                    p("centerX", "Center X", 0.0...1.0, 0.5),
-                    p("centerY", "Center Y", 0.0...1.0, 0.5)
-                ],
-                makeFilters: { values, _ in
-                    [AlphaVignette(
-                        center: CGPoint(x: values["centerX"] ?? 0.5, y: values["centerY"] ?? 0.5),
-                        start: values["start"] ?? 0.3,
-                        end: values["end"] ?? 0.85,
-                        innerAlpha: values["inner"] ?? 1.0,
-                        outerAlpha: values["outer"] ?? 0.2,
-                        filterAnimators: []
-                    )]
-                }
-            ),
-            ShowcaseEntry(
-                id: "color_vignette",
-                name: "Color Vignette",
-                subtitle: "Tinted edge overlay",
-                category: "Vignette",
-                parameters: [
-                    p("start", "Start", 0.1...0.8, 0.35),
-                    p("end", "End", 0.2...1.0, 0.90),
-                    p("alpha", "Ring Alpha", 0.0...1.0, 0.35),
-                    p("centerX", "Center X", 0.0...1.0, 0.5),
-                    p("centerY", "Center Y", 0.0...1.0, 0.5)
-                ],
-                makeFilters: { values, _ in
-                    [ColorVignette(
-                        center: CGPoint(x: values["centerX"] ?? 0.5, y: values["centerY"] ?? 0.5),
-                        centerColor: CIColor(red: 0, green: 0, blue: 0, alpha: 0.0),
-                        ringColor: CIColor(red: 0, green: 0, blue: 0, alpha: values["alpha"] ?? 0.35),
-                        start: values["start"] ?? 0.35,
-                        end: values["end"] ?? 0.90,
-                        filterAnimators: []
-                    )]
-                }
-            ),
             ShowcaseEntry(
                 id: "bloom_glow",
                 name: "Bloom Glow",
