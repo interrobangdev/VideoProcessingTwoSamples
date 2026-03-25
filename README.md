@@ -34,7 +34,6 @@ Composites photo and GIF overlays on top of a video with adjustable position, sc
 
 - Each sample is a standalone Xcode project in its own folder.
 - Several sample folders include their own `README.md` with deeper setup or implementation notes.
-- `FilterShowcaseSample2` currently contains an older Xcode project shell; the active filter showcase source lives in `FilterShowcaseSample`.
 
 ## Core Concepts Used Across Samples
 
