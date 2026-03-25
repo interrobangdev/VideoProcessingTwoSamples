@@ -1,31 +1,45 @@
 # VideoProcessingTwo Samples
 
-A collection of sample iOS projects demonstrating the capabilities of the VideoProcessingTwo framework.
+Standalone iOS sample apps for exploring the `VideoProcessingTwo` framework.
 
-## Sample Projects
+Main framework repo: [interrobangdev/VideoProcessingTwo](https://github.com/interrobangdev/VideoProcessingTwo)
+
+## Current Samples
 
 ### AnimatedFiltersSample
-Demonstrates real-time filter animations applied to video playback. Shows how to create animated filters with customizable parameters that change over time.
+Shows how to animate filter parameters over time with `FilterAnimator`, including fade, blur, zoom, color pulse, preset bezier curves, and a custom bezier curve editor.
 
-### FilterShowcaseSample2
-Interactive filter explorer for `VideoProcessingTwo` with a searchable filter/style list and a live parameter panel. Includes migrated Shimmeo style filters and style recipes so you can tune values and see results immediately.
+### FilterShowcaseSample
+Live camera filter playground with a searchable filter and style catalog, slide-up controls, parameter sliders, and front/back camera switching.
+
+### FourVideoGridSample
+Builds a 2x2 video composition and turns it into an interactive sliding puzzle, with shuffle, solve, and photo library video selection support.
 
 ### HandPoseAnimationSample
-Uses Vision framework hand pose detection to drive interactive animations and effects. The app detects hand positions and uses them to control blur and brightness filters in real-time. Also demonstrates audio-driven animations for visual feedback.
+Uses live hand-pose detection and optional audio input to drive real-time visual effects, on-screen metrics, and recording/export of the processed camera feed.
 
 ### MultiLayerSample
-Shows how to composite multiple video and image layers together with text overlays. Demonstrates layer positioning, timing, GIF playback, and filter application across multiple layers.
+Demonstrates layered composition with timed video clips, still images, GIF overlays, and text arranged in a single `VideoScene`.
 
 ### RealtimeCameraSample
-Applies real-time filters to live camera feed using the CameraSource pattern. Includes selectable filters (Gaussian Blur, Crystallize, Color Adjustment, Glitch Effect) with adjustable intensity.
+Applies selectable filters directly to a live camera feed using `CameraSource`, including blur, crystallize, color adjustment, and glitch effects.
+
+### VideoFilter
+Metal-backed filter preview app for testing the framework's filter catalog on a looping video, with live parameter updates, export, and share/save flow.
 
 ### VideoOverlaySample
-Composites photo and GIF overlays on top of video with adjustable opacity, position, and scale. Demonstrates how to create dynamic overlays with fade filters and export the composed result.
+Composites photo and GIF overlays on top of a video with adjustable position, scale, and opacity, then exports the finished result.
 
-## Key Concepts
+## Repo Notes
 
-- **CameraSource**: Integrates camera capture sessions directly into VideoScene rendering pipelines
-- **Layers & Groups**: Organize visual elements hierarchically for complex compositions
-- **Filters**: Apply real-time effects to camera feeds and video playback
-- **VideoScene**: The main composition object that manages rendering and effects
-- **Surface**: Represents visual content (video, image, camera feed, text) positioned within a layer
+- Each sample is a standalone Xcode project in its own folder.
+- Several sample folders include their own `README.md` with deeper setup or implementation notes.
+- `FilterShowcaseSample2` currently contains an older Xcode project shell; the active filter showcase source lives in `FilterShowcaseSample`.
+
+## Core Concepts Used Across Samples
+
+- **VideoScene**: The main composition object for arranging sources and effects.
+- **Layers and Groups**: Structure video, image, GIF, text, and camera content into composited scenes.
+- **Filters**: Apply real-time and export-time effects to camera feeds and prerecorded media.
+- **CameraSource**: Connect live camera capture to the rendering pipeline.
+- **ExportManager**: Render a composed scene out to a movie file.
